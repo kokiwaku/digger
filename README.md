@@ -18,6 +18,32 @@ digger/
 └── backend/    # Hono + TypeScript
 ```
 
+## 疎通イメージ
+
+```mermaid
+flowchart LR
+    subgraph Browser["ブラウザ"]
+        FE["Frontend<br/>React + Vite<br/>:5173"]
+    end
+
+    subgraph Server["Node.js"]
+        BE["Backend<br/>Hono<br/>:8787"]
+    end
+
+    DB[("MongoDB<br/>:27017")]
+
+    FE -->|"GET /api/health<br/>(React → Hono 疎通確認)"| BE
+    FE -->|"GET /api/health/db<br/>(DB接続確認を中継)"| BE
+    BE -->|"ping<br/>(Hono → MongoDB 接続確認)"| DB
+
+    BE -.->|"status: ok"| FE
+    DB -.->|"pong"| BE
+```
+
+- フロントエンドは `VITE_API_BASE_URL`（既定 `http://localhost:8787`）宛にブラウザから直接 `fetch` します。
+- バックエンドは `FRONTEND_ORIGIN` を許可オリジンとした CORS 設定で応答します。
+- `/api/health/db` はバックエンドが MongoDB に ping し、その結果をフロントエンドに返す構成です。
+
 ## 起動方法（Docker Compose）
 
 前提: Docker / Docker Compose がインストールされていること。
