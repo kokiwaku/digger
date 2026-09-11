@@ -1,0 +1,145 @@
+.page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 2rem 1.25rem 4rem;
+  max-width: 640px;
+  margin: 0 auto;
+  font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+  color: #1a1a1a;
+}
+
+.brand {
+  margin: 0 0 0.25rem;
+  font-size: 1.75rem;
+  letter-spacing: 0.02em;
+}
+
+.tagline {
+  margin: 0 0 2rem;
+  color: #666;
+  font-size: 0.95rem;
+}
+
+.dig-form {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.dig-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+}
+
+.dig-input:focus {
+  outline: 2px solid #2b6cb0;
+  outline-offset: 1px;
+}
+
+.dig-button {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+  background: #1a1a1a;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dig-button:disabled {
+  background: #999;
+  cursor: not-allowed;
+}
+
+.error-message {
+  color: #c0392b;
+  background: #fdecea;
+  border: 1px solid #f5c6c2;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+}
+
+.loading-message {
+  color: #666;
+  margin-bottom: 1.5rem;
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.result-title {
+  margin: 0;
+  font-size: 1.4rem;
+  line-height: 1.4;
+}
+
+.result-source-url {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: #888;
+  word-break: break-all;
+}
+
+.section-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.section-body {
+  margin: 0;
+  line-height: 1.7;
+}
+
+.knowledge-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.knowledge-card {
+  width: 100%;
+  text-align: left;
+  padding: 0.9rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fafafa;
+  cursor: pointer;
+  font: inherit;
+}
+
+.knowledge-card:hover {
+  border-color: #2b6cb0;
+  background: #f2f7fc;
+}
+
+.knowledge-card-title {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+}
+
+.knowledge-card-summary {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #555;
+  line-height: 1.6;
+}

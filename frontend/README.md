@@ -9,7 +9,9 @@ frontend/
 ├── index.html       # Viteのエントリーhtml。#root にReactをマウント
 ├── src/
 │   ├── main.tsx      # Reactのエントリーポイント（createRoot）
-│   ├── App.tsx        # アプリ本体。ヘルスチェックUIを含む
+│   ├── App.tsx        # アプリ本体。URL入力〜「掘る」結果表示のUI
+│   ├── App.css          # App.tsx のスタイル
+│   ├── types.ts          # /api/dig のリクエスト/レスポンス型
 │   └── vite-env.d.ts   # Vite用の型定義（import.meta.env等）
 ├── Dockerfile
 ├── vite.config.ts
@@ -22,19 +24,21 @@ frontend/
 flowchart TD
     A["index.html<br/>#root"] --> B["main.tsx<br/>ReactDOM.createRoot"]
     B --> C["App.tsx"]
-    C --> D["useApiCheck('/api/health')"]
-    C --> E["useApiCheck('/api/health/db')"]
-    D & E -->|"fetch(API_BASE_URL + path)"| F["Backend API<br/>VITE_API_BASE_URL"]
-    D --> G["StatusCard<br/>(React → Hono 疎通確認)"]
-    E --> H["StatusCard<br/>(Hono → MongoDB 接続確認)"]
+    C -->|"入力状態(url)<br/>結果状態(DigState)"| C
+    C -->|"POST /api/dig<br/>{ url }"| F["Backend API<br/>VITE_API_BASE_URL"]
+    F -->|"200: DigResult / 400: error"| C
+    C --> G["結果表示<br/>タイトル/要約/なぜ重要か/前提知識カード"]
 ```
 
 - **`main.tsx`**: `App` を `React.StrictMode` でラップしてDOMにマウントするだけの薄いエントリーポイント。
 - **`App.tsx`**:
-  - `useApiCheck(path)` というカスタムフックが、指定パスに `fetch` し `{ loading, data, error }` を状態管理します（`AbortController` は使わず `cancelled` フラグでアンマウント後の `setState` を防止）。
   - `API_BASE_URL` は `import.meta.env.VITE_API_BASE_URL`（未設定時は `http://localhost:8787` にフォールバック）。
-  - `/api/health` と `/api/health/db` の2つを呼び出し、それぞれ `StatusCard` コンポーネントで結果（ローディング中／エラー／JSONレスポンス）を表示します。
-  - スタイリングはインラインstyleのみで、CSSフレームワークやUIライブラリは未導入です。
+  - フォームでURLを入力し「掘る」を押すと `digUrl()` が `POST /api/dig` を呼び出します。バックエンドが実際にURLへアクセスして抽出した`title`が表示されます（`summary`/`whyItMatters`/`backgroundKnowledge`はまだ固定のモック値）。
+  - 状態は `DigState`（`idle` / `loading` / `error` / `success`）という判別可能なユニオン型1つで管理し、状態管理ライブラリは使わず `useState` のみです。
+  - 成功時はレスポンス（`DigResult`）のタイトル・要約・なぜ重要か・前提知識（カード風の `<button>` 一覧）を順に表示します。前提知識カードはクリックしても現状は何も起きません（深掘り導線は未実装）。
+  - エラー時はバックエンドが返した `error` メッセージ、またはネットワークエラーの内容を表示します。
+- **`types.ts`**: `/api/dig` のレスポンス型（`DigResult` / `DigSource` / `BackgroundKnowledge`）を定義。backend側の `src/types.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。
+- **`App.css`**: 余白の広いシンプルなレイアウト。`flex-wrap` と相対単位でスマホ幅でも崩れないようにしています。CSSフレームワーク等は未導入です。
 
 ## 環境変数（`.env`）
 
@@ -69,11 +73,13 @@ npm install
 npm run dev
 ```
 
-`http://localhost:5173` を開くと、バックエンドの2つのヘルスチェックAPIの結果がカード表示されます。バックエンド（とMongoDB）が起動していないと `error` 表示になります。
+`http://localhost:5173` を開き、URL入力欄に記事URLを入れて「掘る」を押すと、バックエンドからのモック解析結果が表示されます。バックエンドが起動していない、またはURLが不正だとエラーメッセージが表示されます。
 
 ## 今後の拡張ポイント（未実装）
 
+- 前提知識カードをクリックした際の深掘り（関連トピックの掘り下げ）導線
 - ルーティング（現状はApp.tsx単一ページ）
-- 状態管理ライブラリ（現状はuseState/useEffectのみ）
+- 状態管理ライブラリ（現状はuseStateのみ）
 - UIコンポーネントの共通化・デザインシステム導入
-- APIクライアントの共通化（現状は `useApiCheck` 内に `fetch` 直書き）
+- APIクライアントの共通化（現状は `digUrl` 関数に `fetch` 直書き）
+- frontend/backend間で重複しているレスポンス型の共有化
