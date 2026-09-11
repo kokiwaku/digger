@@ -3,7 +3,7 @@
 Digger は「興味を持ったことを深掘りし、理解したことを蓄積して次の理解につなげる」ためのサービスです。
 最初の入力手段としてニュースURLを想定していますが、ニュースに限定されない汎用的な「深掘り・蓄積」の仕組みを目指します。
 
-現時点ではまだ業務機能はなく、開発環境の土台（React ⇄ Hono の疎通確認、Hono ⇄ MongoDB の接続確認）のみを実装しています。
+MVPとして、記事URLを入力すると固定のモック解析結果を返す「掘る」機能を実装しています（記事取得・LLM連携・DB保存は未実装）。
 
 ## 構成
 
@@ -44,6 +44,37 @@ flowchart LR
 - バックエンドは `FRONTEND_ORIGIN` を許可オリジンとした CORS 設定で応答します。
 - `/api/health/db` はバックエンドが MongoDB に ping し、その結果をフロントエンドに返す構成です。
 
+## 「掘る」機能（MVP）
+
+トップ画面のURL入力欄に記事URLを入力して「掘る」を押すと、`POST /api/dig` が呼ばれ、解析結果（タイトル・要約・なぜ重要か・前提知識）が画面に表示されます。
+
+バックエンドは入力されたURLに実際にアクセスしてHTMLを取得し、[Mozilla Readability](https://github.com/mozilla/readability)（Firefoxのリーダービューと同じ抽出エンジン）でnav/footer/広告などを除いた本文と`title`を抽出します。ニュースサイト専用のパースは行わず、一般的なWeb記事を対象にした構造です。**`summary` / `whyItMatters` / `backgroundKnowledge` はまだLLM連携前なので固定のモック値のままです。**
+
+```
+POST /api/dig
+Content-Type: application/json
+
+{ "url": "https://example.com/article" }
+```
+
+- URLが未指定・不正な形式・`http`/`https`以外のプロトコルの場合は `400 { "error": "..." }` を返します。
+- 記事取得・抽出に失敗した場合は `422`（本文抽出失敗・HTML以外のコンテンツ）または `502`（アクセス失敗・非2xxレスポンス）で `{ "error": "..." }` を返します。詳細は [`backend/README.md`](backend/README.md) を参照してください。
+- 成功時は以下の形のJSONを返します（`title`は実際に取得した値、`summary`以下は固定値）。
+
+```json
+{
+  "source": { "type": "web_article", "url": "https://example.com/article", "title": "（取得した実際の記事タイトル）" },
+  "summary": "この記事の要約です。",
+  "whyItMatters": "なぜこの内容が重要なのかの説明です。",
+  "backgroundKnowledge": [
+    { "id": "knowledge-1", "title": "前提知識A", "summary": "..." },
+    { "id": "knowledge-2", "title": "前提知識B", "summary": "..." }
+  ]
+}
+```
+
+記事本文そのものはレスポンスに含めていません（フロントエンドへ大量のテキストを返さないため）。前提知識はカード状のボタンとして表示されますが、クリックしても現時点では何も起きません（深掘り導線は未実装）。
+
 ## 起動方法（Docker Compose）
 
 前提: Docker / Docker Compose がインストールされていること。
@@ -58,9 +89,10 @@ docker compose up --build
 - バックエンドAPI: http://localhost:8787
   - `GET /api/health` — React → Hono の疎通確認
   - `GET /api/health/db` — Hono → MongoDB の接続確認
+  - `POST /api/dig` — URLを受け取り、モック解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
 - MongoDB: `mongodb://localhost:27017`（ホストからも接続可能）
 
-フロントエンドの画面 (http://localhost:5173) を開くと、上記2つのAPIを呼び出した結果がカードとして表示されます。両方とも `status: "ok"` になっていれば疎通・接続ともに成功しています。
+フロントエンドの画面 (http://localhost:5173) を開くと、URL入力欄と「掘る」ボタンが表示されます。記事URLを入力して「掘る」を押すと解析結果（モック）が表示されます。
 
 停止する場合:
 
@@ -76,7 +108,7 @@ docker compose down -v
 
 ## 起動方法（Docker を使わないローカル開発）
 
-Node.js 20 系、および MongoDB（ローカルまたはリモート）が必要です。
+Node.js 22 系、および MongoDB（ローカルまたはリモート）が必要です。
 
 ### 1. MongoDB を起動
 
@@ -129,4 +161,11 @@ npm run dev
 
 ## 今後について
 
-業務機能（URL/コンテンツの取り込み、深掘りメモの蓄積、関連付けなど）やDBスキーマは未設計です。ニュースURLはあくまで最初の入力手段の一例であり、将来的には記事・動画・書籍・会話メモなど、さまざまな「興味の入口」を扱えるデータモデルにする想定です。設計は今後のイテレーションで詰めていきます。
+現状は `POST /api/dig` が固定のモック結果を返すのみです。以下は未実装・未設計です。
+
+- 実際の記事取得（スクレイピング/OGP取得など）とLLMによる要約・解析
+- 解析結果・深掘りメモのMongoDBへの永続化
+- 前提知識カードをクリックした際の深掘り（関連トピックの掘り下げ）導線
+- 認証・ユーザーごとのデータ分離
+
+ニュースURLはあくまで最初の入力手段の一例であり、将来的には記事・動画・書籍・会話メモなど、さまざまな「興味の入口」を扱えるデータモデルにする想定です。設計は今後のイテレーションで詰めていきます。
