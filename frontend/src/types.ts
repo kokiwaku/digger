@@ -1,18 +1,37 @@
-export type BackgroundKnowledge = {
-  id: string;
-  title: string;
-  summary: string;
-};
-
 export type DigSource = {
   type: "web_article";
   url: string;
   title: string;
 };
 
-export type DigResult = {
-  source: DigSource;
+export type Concept = {
+  id: string;
+  name: string;
+  description: string;
+  importance: "required" | "helpful";
+};
+
+export type Entity = {
+  name: string;
+  type: "person" | "organization" | "place" | "event" | "other";
+  description?: string;
+};
+
+export type Connection = {
+  topic: string;
+  relation: string;
+};
+
+export type ArticleAnalysis = {
   summary: string;
   whyItMatters: string;
-  backgroundKnowledge: BackgroundKnowledge[];
+  concepts: Concept[];
+  entities: Entity[];
+  connections: Connection[];
+  deepDiveQuestions: string[];
+};
+
+export type DigResult = {
+  source: DigSource;
+  analysis: ArticleAnalysis;
 };

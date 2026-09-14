@@ -46,9 +46,11 @@ flowchart LR
 
 ## 「掘る」機能（MVP）
 
-トップ画面のURL入力欄に記事URLを入力して「掘る」を押すと、`POST /api/dig` が呼ばれ、解析結果（タイトル・要約・なぜ重要か・前提知識）が画面に表示されます。
+トップ画面のURL入力欄に記事URLを入力して「掘る」を押すと、`POST /api/dig` が呼ばれ、解析結果（タイトル・要約・なぜ重要か・前提知識・関連トピック・深掘りの問い）が画面に表示されます。
 
-バックエンドは入力されたURLに実際にアクセスしてHTMLを取得し、[Mozilla Readability](https://github.com/mozilla/readability)（Firefoxのリーダービューと同じ抽出エンジン）でnav/footer/広告などを除いた本文と`title`を抽出します。ニュースサイト専用のパースは行わず、一般的なWeb記事を対象にした構造です。**`summary` / `whyItMatters` / `backgroundKnowledge` はまだLLM連携前なので固定のモック値のままです。**
+バックエンドは入力されたURLに実際にアクセスしてHTMLを取得し、[Mozilla Readability](https://github.com/mozilla/readability)（Firefoxのリーダービューと同じ抽出エンジン）でnav/footer/広告などを除いた本文と`title`を抽出します。ニュースサイト専用のパースは行わず、一般的なWeb記事を対象にした構造です。
+
+抽出した本文は「Article Analysis」というLLM処理（[`backend/README.md`](backend/README.md#llm処理article-analysis--personalized-analysis--knowledge-extraction)を参照）に渡され、要約・重要性・前提知識・関連人物や組織・関連トピック・深掘りの問いを生成します。**現時点では実際のLLM APIは呼ばず、固定のモック実装（日銀の利上げに関するサンプルデータ）を返します。** ただし型・インターフェースは本物のLLM実装に差し替えられる形で用意済みです。
 
 ```
 POST /api/dig
@@ -60,21 +62,29 @@ Content-Type: application/json
 - URLが未指定・不正な形式・`http`/`https`以外のプロトコル・アクセスが許可されていないホスト（下記SSRF対策を参照）の場合は `400 { "error": "..." }` を返します。
 - robots.txtにより取得が許可されていない場合は `403 { "error": "..." }` を返します。
 - 記事取得・抽出に失敗した場合は `422`（本文抽出失敗・HTML以外のコンテンツ）または `502`（アクセス失敗・非2xxレスポンス・ホスト名解決失敗）で `{ "error": "..." }` を返します。詳細は [`backend/README.md`](backend/README.md) を参照してください。
-- 成功時は以下の形のJSONを返します（`title`は実際に取得した値、`summary`以下は固定値）。
+- 成功時は以下の形のJSONを返します（`source.title`は実際に取得した値、`analysis`以下は現時点ではモックのサンプルデータ）。
 
 ```json
 {
   "source": { "type": "web_article", "url": "https://example.com/article", "title": "（取得した実際の記事タイトル）" },
-  "summary": "この記事の要約です。",
-  "whyItMatters": "なぜこの内容が重要なのかの説明です。",
-  "backgroundKnowledge": [
-    { "id": "knowledge-1", "title": "前提知識A", "summary": "..." },
-    { "id": "knowledge-2", "title": "前提知識B", "summary": "..." }
-  ]
+  "analysis": {
+    "summary": "この記事では日本銀行が政策金利の引き上げを決定したことが報じられています。...",
+    "whyItMatters": "金利の変化は物価・為替・家計や企業の資金繰りなど経済全体に波及するため...",
+    "concepts": [
+      { "id": "concept-policy-rate", "name": "政策金利", "description": "...", "importance": "required" }
+    ],
+    "entities": [
+      { "name": "日本銀行", "type": "organization", "description": "..." }
+    ],
+    "connections": [
+      { "topic": "円安", "relation": "金利差を通じて為替に影響する" }
+    ],
+    "deepDiveQuestions": ["なぜ利上げすると円高になりやすい？", "..."]
+  }
 }
 ```
 
-記事本文そのものはレスポンスに含めていません（フロントエンドへ大量のテキストを返さないため）。前提知識はカード状のボタンとして表示されますが、クリックしても現時点では何も起きません（深掘り導線は未実装）。
+記事本文そのものはレスポンスに含めていません（フロントエンドへ大量のテキストを返さないため）。前提知識（`concepts`）と深掘りの問い（`deepDiveQuestions`）はクリック可能なカード/ボタン状に表示されますが、クリックしても現時点では何も起きません（深掘り導線は未実装）。
 
 ### 記事取得ポリシー
 
@@ -174,11 +184,13 @@ npm run dev
 
 ## 今後について
 
-現状は `POST /api/dig` が固定のモック結果を返すのみです。以下は未実装・未設計です。
+記事の取得・本文抽出は実装済みですが、以下は未実装・未設計です。
 
-- 実際の記事取得（スクレイピング/OGP取得など）とLLMによる要約・解析
-- 解析結果・深掘りメモのMongoDBへの永続化
-- 前提知識カードをクリックした際の深掘り（関連トピックの掘り下げ）導線
+- Article Analysis（`backend/src/llm/`）を実際のLLM APIに接続する
+- Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線と、ユーザーの理解履歴のデータモデル
+- Knowledge Extraction（深掘り対話から学習候補を抽出するLLM処理）を呼び出す深掘り対話UI
+- 解析結果・深掘りメモ・ユーザーの理解履歴のMongoDBへの永続化
+- 前提知識カード・深掘りの問いをクリックした際の実際の深掘り導線
 - 認証・ユーザーごとのデータ分離
 
 ニュースURLはあくまで最初の入力手段の一例であり、将来的には記事・動画・書籍・会話メモなど、さまざまな「興味の入口」を扱えるデータモデルにする想定です。設計は今後のイテレーションで詰めていきます。

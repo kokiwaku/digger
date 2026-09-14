@@ -1,11 +1,7 @@
+import type { ArticleAnalysis } from "./llm/articleAnalysis.js";
+
 export type DigRequest = {
   url: string;
-};
-
-export type BackgroundKnowledge = {
-  id: string;
-  title: string;
-  summary: string;
 };
 
 export type DigSource = {
@@ -16,7 +12,5 @@ export type DigSource = {
 
 export type DigResult = {
   source: DigSource;
-  summary: string;
-  whyItMatters: string;
-  backgroundKnowledge: BackgroundKnowledge[];
+  analysis: ArticleAnalysis;
 };
