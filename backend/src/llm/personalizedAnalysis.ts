@@ -4,12 +4,14 @@ import { articleAnalysisSchema } from "./articleAnalysis.js";
 // Personalized Analysis: Article Analysisの結果と、そのユーザーが過去に理解した知識を
 // 照合し、「このユーザーには何を説明すべきか」を決める処理。
 
-const userKnowledgeSchema = z.object({
+// ユーザーが過去に理解した知識1件分。Personalized AnalysisとDeep Diveの両方で使う。
+export const userKnowledgeSchema = z.object({
   id: z.string(),
   concept: z.string(),
   statement: z.string(),
   confidence: z.enum(["low", "medium", "high"]).optional(),
 });
+export type UserKnowledge = z.infer<typeof userKnowledgeSchema>;
 
 const relatedHistorySchema = z.object({
   title: z.string(),

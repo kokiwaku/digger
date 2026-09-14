@@ -35,3 +35,14 @@ export type DigResult = {
   source: DigSource;
   analysis: ArticleAnalysis;
 };
+
+export type ConversationTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type DeepDiveResponse = {
+  answer: string;
+  relatedConcepts: string[];
+  suggestedFollowUps: string[];
+};

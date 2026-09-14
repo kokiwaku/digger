@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import { pingDatabase } from "./db.js";
 import { buildDigResult, parseArticleUrl } from "./dig.js";
 import { ArticleFetchError } from "./articleFetcher.js";
+import { buildDeepDiveResponse, parseDeepDiveInput } from "./deepDive.js";
 import type { DigRequest } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -46,6 +47,26 @@ app.post("/api/dig", async (c) => {
       return c.json({ error: err.message }, err.status);
     }
     const message = err instanceof Error ? err.message : "記事の解析に失敗しました";
+    return c.json({ error: message }, 502);
+  }
+});
+
+app.post("/api/deep-dive", async (c) => {
+  const body = await c.req.json().catch(() => null);
+
+  let input;
+  try {
+    input = parseDeepDiveInput(body);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid request";
+    return c.json({ error: message }, 400);
+  }
+
+  try {
+    const result = await buildDeepDiveResponse(input);
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "深掘り回答の生成に失敗しました";
     return c.json({ error: message }, 502);
   }
 });

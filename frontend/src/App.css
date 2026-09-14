@@ -176,3 +176,51 @@
   font-size: 0.9rem;
   color: #555;
 }
+
+.deep-dive {
+  padding-top: 0.5rem;
+  border-top: 1px solid #eee;
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.chat-bubble {
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  max-width: 100%;
+}
+
+.chat-user {
+  background: #eef4fb;
+  align-self: flex-end;
+}
+
+.chat-assistant {
+  background: #fafafa;
+  border: 1px solid #eee;
+}
+
+.chat-role {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #888;
+}
+
+.chat-content {
+  margin: 0;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.followup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
