@@ -71,23 +71,48 @@ export default function App() {
           </header>
 
           <section>
-            <h3 className="section-label">要約</h3>
-            <p className="section-body">{state.result.summary}</p>
+            <h3 className="section-label">まずこれだけ</h3>
+            <p className="section-body">{state.result.analysis.summary}</p>
           </section>
 
           <section>
-            <h3 className="section-label">なぜ重要か</h3>
-            <p className="section-body">{state.result.whyItMatters}</p>
+            <h3 className="section-label">なぜ重要？</h3>
+            <p className="section-body">{state.result.analysis.whyItMatters}</p>
           </section>
 
           <section>
-            <h3 className="section-label">理解するための前提知識</h3>
-            <ul className="knowledge-list">
-              {state.result.backgroundKnowledge.map((knowledge) => (
-                <li key={knowledge.id}>
-                  <button type="button" className="knowledge-card">
-                    <p className="knowledge-card-title">{knowledge.title}</p>
-                    <p className="knowledge-card-summary">{knowledge.summary}</p>
+            <h3 className="section-label">理解するための前提</h3>
+            <ul className="card-list">
+              {state.result.analysis.concepts.map((concept) => (
+                <li key={concept.id}>
+                  <button type="button" className="concept-card">
+                    <p className="concept-card-title">{concept.name}</p>
+                    <p className="concept-card-summary">{concept.description}</p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section>
+            <h3 className="section-label">この話とのつながり</h3>
+            <ul className="connection-list">
+              {state.result.analysis.connections.map((connection) => (
+                <li key={connection.topic} className="connection-item">
+                  <p className="connection-topic">{connection.topic}</p>
+                  <p className="connection-relation">→ {connection.relation}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section>
+            <h3 className="section-label">次に掘るなら</h3>
+            <ul className="card-list">
+              {state.result.analysis.deepDiveQuestions.map((question) => (
+                <li key={question}>
+                  <button type="button" className="question-button">
+                    → {question}
                   </button>
                 </li>
               ))}
