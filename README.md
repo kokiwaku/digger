@@ -84,7 +84,28 @@ Content-Type: application/json
 }
 ```
 
-記事本文そのものはレスポンスに含めていません（フロントエンドへ大量のテキストを返さないため）。前提知識（`concepts`）と深掘りの問い（`deepDiveQuestions`）はクリック可能なカード/ボタン状に表示されますが、クリックしても現時点では何も起きません（深掘り導線は未実装）。
+記事本文そのものはレスポンスに含めていません（フロントエンドへ大量のテキストを返さないため）。前提知識（`concepts`）は表示のみで、深掘りの問い（`deepDiveQuestions`）は下記の「深掘り対話機能」から実際に質問できます。
+
+## 深掘り対話機能
+
+解析結果の下に「他に気になることは？」という自由入力欄があり、`POST /api/deep-dive` を使ってその場でチャット形式の深掘りができます（ページ遷移なし）。
+
+```
+POST /api/deep-dive
+Content-Type: application/json
+
+{
+  "articleAnalysis": { ... },
+  "question": "なぜ利上げすると円高になりやすいの？",
+  "conversationHistory": []
+}
+```
+
+- 「次に掘るなら」の質問ボタンをクリックした場合も、自由入力欄に質問を入力した場合も、同じ`/api/deep-dive`が呼ばれます。
+- 2回目以降の質問では、これまでの会話（`{ role: "user" | "assistant", content: string }[]`）を`conversationHistory`として送ります。
+- 成功時のレスポンスは `{ answer, relatedConcepts, suggestedFollowUps }`。回答本文に加え、関連する前提知識と次の質問候補が返り、`suggestedFollowUps`も新たにクリック可能なボタンとして表示されます。
+- **現時点ではLLM未接続のため、`answer`は固定のモック文言です**（`backend/src/llm/deepDive.mock.ts`）。`relatedConcepts`と`suggestedFollowUps`は記事の解析結果（`concepts`/`deepDiveQuestions`）から実際に組み立てています。
+- 会話履歴はMongoDBにはまだ保存されません（ページをリロードすると消えます）。認証も不要です。
 
 ### 記事取得ポリシー
 
@@ -112,10 +133,11 @@ docker compose up --build
 - バックエンドAPI: http://localhost:8787
   - `GET /api/health` — React → Hono の疎通確認
   - `GET /api/health/db` — Hono → MongoDB の接続確認
-  - `POST /api/dig` — URLを受け取り、モック解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
+  - `POST /api/dig` — URLを受け取り、記事解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
+  - `POST /api/deep-dive` — 解析結果と質問を受け取り、深掘りの回答を返す（[深掘り対話機能](#深掘り対話機能)を参照）
 - MongoDB: `mongodb://localhost:27017`（ホストからも接続可能）
 
-フロントエンドの画面 (http://localhost:5173) を開くと、URL入力欄と「掘る」ボタンが表示されます。記事URLを入力して「掘る」を押すと解析結果（モック）が表示されます。
+フロントエンドの画面 (http://localhost:5173) を開くと、URL入力欄と「掘る」ボタンが表示されます。記事URLを入力して「掘る」を押すと解析結果が表示され、その下から自由入力や質問候補のクリックで深掘りができます。
 
 停止する場合:
 
@@ -186,11 +208,10 @@ npm run dev
 
 記事の取得・本文抽出は実装済みですが、以下は未実装・未設計です。
 
-- Article Analysis（`backend/src/llm/`）を実際のLLM APIに接続する
+- Article Analysis・Deep Dive（`backend/src/llm/`）を実際のLLM APIに接続する
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線と、ユーザーの理解履歴のデータモデル
-- Knowledge Extraction（深掘り対話から学習候補を抽出するLLM処理）を呼び出す深掘り対話UI
-- 解析結果・深掘りメモ・ユーザーの理解履歴のMongoDBへの永続化
-- 前提知識カード・深掘りの問いをクリックした際の実際の深掘り導線
+- Knowledge Extraction（深掘り対話から学習候補を抽出するLLM処理）を実際の深掘り対話（`/api/deep-dive`）に接続する
+- 解析結果・深掘りの会話履歴・ユーザーの理解履歴のMongoDBへの永続化
 - 認証・ユーザーごとのデータ分離
 
 ニュースURLはあくまで最初の入力手段の一例であり、将来的には記事・動画・書籍・会話メモなど、さまざまな「興味の入口」を扱えるデータモデルにする想定です。設計は今後のイテレーションで詰めていきます。

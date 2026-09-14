@@ -10,6 +10,7 @@ backend/
 │   ├── index.ts                    # エントリーポイント。Honoアプリの定義とルーティング、サーバー起動
 │   ├── db.ts                        # MongoDB接続クライアントの生成・pingヘルパー
 │   ├── dig.ts                         # /api/dig のURLバリデーションと解析結果の組み立て
+│   ├── deepDive.ts                     # /api/deep-dive のリクエスト検証と回答の組み立て
 │   ├── articleFetcher.ts               # 記事HTMLの取得（リダイレクト追跡）とReadabilityによる本文/タイトル抽出
 │   ├── network.ts                       # SSRF対策（private/loopback/link-localホストの拒否）
 │   ├── robots.ts                         # robots.txtの取得・パース・許可判定
@@ -17,7 +18,8 @@ backend/
 │   ├── types.ts                             # /api/dig のリクエスト/レスポンス型
 │   ├── network.test.ts                       # network.ts のユニットテスト
 │   ├── robots.test.ts                         # robots.ts のユニットテスト
-│   └── llm/                                    # LLMを使う3処理の型・schema・interface・モック実装
+│   └── llm/                                    # LLMを使う4処理の型・schema・interface・モック実装
+│       ├── conversation.ts                       # 会話ターンの共通型（Knowledge Extraction / Deep Diveで共用）
 │       ├── articleAnalysis.ts                    # 型・zod schema・ArticleAnalysisService interface
 │       ├── articleAnalysis.mock.ts                # モック実装（固定のデモ用サンプルを返す）
 │       ├── articleAnalysis.mock.test.ts            # モック実装のユニットテスト
@@ -25,7 +27,10 @@ backend/
 │       ├── personalizedAnalysis.mock.ts               # モック実装（concept名の単純一致で既知/未知を判定）
 │       ├── personalizedAnalysis.mock.test.ts           # モック実装のユニットテスト
 │       ├── knowledgeExtraction.ts                        # 型・zod schema・KnowledgeExtractionService interface
-│       └── knowledgeExtraction.mock.ts                     # モック実装（固定の候補を1件返す）
+│       ├── knowledgeExtraction.mock.ts                     # モック実装（固定の候補を1件返す）
+│       ├── deepDive.ts                                       # 型・zod schema・DeepDiveService interface
+│       ├── deepDive.mock.ts                                   # モック実装（記事の解析結果から応答を組み立てる）
+│       └── deepDive.mock.test.ts                               # モック実装のユニットテスト
 ├── Dockerfile
 ├── tsconfig.json
 └── package.json
@@ -59,6 +64,12 @@ flowchart TD
     L -->|ArticleAnalysis| I
     I --> H
 
+    B --> M["POST /api/deep-dive"]
+    M -->|"deepDiveInputSchema.safeParse"| DD["deepDive.ts<br/>buildDeepDiveResponse"]
+    DD -->|"ask({ articleAnalysis, question, conversationHistory })"| DDS["llm/deepDive.mock.ts<br/>DeepDiveService（モック）"]
+    DDS -->|DeepDiveResponse| DD
+    DD --> M
+
     A -->|"serve()"| G["@hono/node-server<br/>:8787"]
 ```
 
@@ -74,16 +85,18 @@ flowchart TD
 - **`robots.ts`**: `ensureAllowedByRobots(url, userAgent)` がrobots.txtを取得・パースし、Diggerの User-Agent（`digger`）または`*`グループのルールと照合。`Disallow`に一致すれば`ArticleFetchError`（`403`）。robots.txt自体が取得できない（ネットワークエラー・非2xxなど）場合は許可されているものとして扱う。簡易パーサのため`Allow`/`Disallow`のみサポートし、`Crawl-delay`等は無視する。
 - **`errors.ts`**: `ArticleFetchError`（`400`/`403`/`422`/`502`のいずれかのステータスを持つ）。記事取得パイプライン全体（URL検証・SSRF対策・robots確認・HTTP取得・本文抽出）で共通に使うエラー型。
 - **`dig.ts`**: `parseArticleUrl()` がリクエストの `url` を検証（未指定・不正な形式・http/https以外のプロトコルはエラー）。`buildDigResult()` が `fetchArticle()` で取得した実際の `title`/`textContent` を `llm/articleAnalysis.mock.ts` の `ArticleAnalysisService` に渡し、その結果と組み合わせて `DigResult` を返します。
-- **`types.ts`**: `/api/dig` のリクエスト型（`DigRequest`）とレスポンス型（`DigResult` / `DigSource`、および `llm/articleAnalysis.ts` の `ArticleAnalysis`）を定義。frontend側の `src/types.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。
-- **`llm/`**: LLMを使う3処理（後述）の型・schema・interface・モック実装。
-- 現時点でルートは3つ:
+- **`deepDive.ts`**: `parseDeepDiveInput()` がリクエストボディを `llm/deepDive.ts` の `deepDiveInputSchema` でそのまま検証（`articleAnalysis`/`question`/`conversationHistory`/`userKnowledge?`の形が正しいか）。`buildDeepDiveResponse()` が `llm/deepDive.mock.ts` の `DeepDiveService` を呼び出すだけの薄いラッパーです。
+- **`types.ts`**: `/api/dig` のリクエスト型（`DigRequest`）とレスポンス型（`DigResult` / `DigSource`、および `llm/articleAnalysis.ts` の `ArticleAnalysis`）を定義。frontend側の `src/types.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。`/api/deep-dive` は `llm/deepDive.ts` の型をそのままリクエスト/レスポンス型として使うため、`types.ts` に重複定義はありません。
+- **`llm/`**: LLMを使う4処理（後述）の型・schema・interface・モック実装。
+- 現時点でルートは4つ:
   - `GET /api/health` — プロセスが生きていることの確認（DBには触れない）
   - `GET /api/health/db` — `pingDatabase()` を呼び、成功なら `200 { status: "ok", db: "connected" }`、失敗なら `503 { status: "error", db: "disconnected", message }`
   - `POST /api/dig` — `{ url: string }` を受け取り、URLバリデーション失敗またはSSRF対象ホストは `400`、robots.txtにより不許可なら `403`、記事取得・抽出・Article Analysisに成功すれば `200` で `DigResult`、それ以外の取得・抽出失敗は `422`（本文抽出失敗・非HTML）または `502`（アクセス失敗・非2xx・ホスト名解決失敗）で `{ error: string }`
+  - `POST /api/deep-dive` — `{ articleAnalysis, question, conversationHistory, userKnowledge? }` を受け取り、schemaバリデーション失敗は `400`、成功すれば `200` で `DeepDiveResponse`（`answer`/`relatedConcepts`/`suggestedFollowUps`）、それ以外の失敗は `502` で `{ error: string }`
 
-## LLM処理（Article Analysis / Personalized Analysis / Knowledge Extraction）
+## LLM処理（Article Analysis / Personalized Analysis / Knowledge Extraction / Deep Dive）
 
-Diggerのコア機能である「記事を深掘りして理解を蓄積する」部分は、将来的に3つの独立したLLM処理として実装します。**現時点ではいずれも外部LLM APIを呼ばず、`llm/*.mock.ts` の固定サンプルデータ（日銀の利上げに関するデモ）を返すだけです。** 型・zod schema・interfaceは本物のLLM実装に差し替えられる形で先に用意しています。
+Diggerのコア機能である「記事を深掘りして理解を蓄積する」部分は、4つの独立したLLM処理として実装します。**Article AnalysisとDeep Diveは外部LLM APIを呼ばず、`llm/*.mock.ts` の固定サンプルデータ（日銀の利上げに関するデモ）を返すだけです。** 型・zod schema・interfaceは本物のLLM実装に差し替えられる形で先に用意しています。
 
 ```mermaid
 flowchart LR
@@ -102,17 +115,26 @@ flowchart LR
         KES --> KE["KnowledgeCandidate[]<br/>concept / statement / evidence /<br/>confidence / isNew"]
     end
 
+    subgraph "4. Deep Dive（実装済み・/api/deep-diveから呼ばれる）"
+        DDI["DeepDiveInput<br/>articleAnalysis + question +<br/>conversationHistory + userKnowledge?"] --> DDS["DeepDiveService<br/>(deepDive.mock.ts)"]
+        DDS --> DDO["DeepDiveResponse<br/>answer / relatedConcepts / suggestedFollowUps"]
+    end
+
     AA -.->|将来: userKnowledgeと合わせて入力| PAI
     AA -.->|将来: 深掘り対話ログと合わせて入力| KEI
+    AA -->|質問のたびに渡す| DDI
+    DDO -.->|会話ログとしてconversationHistoryに蓄積| DDI
 ```
 
-- **なぜ3つに分離するか**: それぞれ目的も入力も異なるため（記事の客観的な解析／ユーザー個人への最適化／対話からの知識抽出）。将来的に別々のプロンプト・別々のモデル（例: 安価なモデルで要約、高性能なモデルで個人化）に切り替えられるよう、最初から独立した`interface`にしています。
-- **共通パターン**: 各処理は `xxx.ts`（型・zod schema・`XxxService` interfaceの3点セット）と `xxx.mock.ts`（そのinterfaceを実装するモック）に分かれています。本物のLLM実装を追加する際は、同じinterfaceを実装する `xxx.openai.ts` のような新しいファイルを作り、呼び出し側（`dig.ts`など）のimportを差し替えるだけで済む構造です。
-- **runtime validation**: 型定義には[Zod](https://zod.dev/)を使い、`z.infer<typeof schema>` でTypeScript型をschemaから導出しています（型とバリデーションルールの二重管理を避けるため）。モック実装も生成したデータを`schema.parse(...)`に通してから返しており、本物のLLM実装でも「LLMのレスポンス(JSON)を`schema.parse(...)`で検証してから返す」という同じパターンを踏襲する想定です。LLMの出力は外部から来る信頼できないデータなので、ここでの検証は将来的に特に重要になります。
+- **なぜ4つに分離するか**: それぞれ目的も入力も異なるため（記事の客観的な解析／ユーザー個人への最適化／対話からの知識抽出／その場のQ&A）。将来的に別々のプロンプト・別々のモデル（例: 安価なモデルで要約、高性能なモデルで個人化）に切り替えられるよう、最初から独立した`interface`にしています。候補ボタンのクリックと自由入力のどちらから来た質問も、同じ`question: string`として`DeepDiveService`に渡るため、呼び出し側で区別する必要がありません。
+- **共通パターン**: 各処理は `xxx.ts`（型・zod schema・`XxxService` interfaceの3点セット）と `xxx.mock.ts`（そのinterfaceを実装するモック）に分かれています。本物のLLM実装を追加する際は、同じinterfaceを実装する `xxx.openai.ts` のような新しいファイルを作り、呼び出し側（`dig.ts`/`deepDive.ts`など）のimportを差し替えるだけで済む構造です。
+- **runtime validation**: 型定義には[Zod](https://zod.dev/)を使い、`z.infer<typeof schema>` でTypeScript型をschemaから導出しています（型とバリデーションルールの二重管理を避けるため）。モック実装も生成したデータを`schema.parse(...)`に通してから返しており、本物のLLM実装でも「LLMのレスポンス(JSON)を`schema.parse(...)`で検証してから返す」という同じパターンを踏襲する想定です。LLMの出力は外部から来る信頼できないデータなので、ここでの検証は将来的に特に重要になります。`deepDive.ts`の`deepDiveInputSchema`はさらに、クライアントからのリクエストボディの検証にもそのまま使われています（`deepDive.ts`（backend直下）の`parseDeepDiveInput()`）。
+- **共通型の再利用**: 会話ターンの型（`{ role: "user" | "assistant", content: string }`）は`llm/conversation.ts`に切り出し、Knowledge ExtractionとDeep Diveの両方から利用しています。ユーザーの過去の知識の型（`UserKnowledge`）は`llm/personalizedAnalysis.ts`からexportし、Deep Diveから再利用しています。
 - **ユーザー知識・履歴の扱い**: Article Analysisにはユーザーの知識や履歴を一切渡しません（記事そのものの客観的な解析のため）。ユーザー個人への最適化はPersonalized Analysisの責務として分離しています。
 - **1. Article Analysis**（`llm/articleAnalysis.ts` / `articleAnalysis.mock.ts`）: 記事の`title`/`url`/`content`から、要約・重要性・前提知識（`concepts`）・関連する人物や組織（`entities`）・他テーマとの関連（`connections`）・深掘りの問い（`deepDiveQuestions`）を生成。`dig.ts`から呼ばれ、`/api/dig`のレスポンスに含まれます。
 - **2. Personalized Analysis**（`llm/personalizedAnalysis.ts` / `personalizedAnalysis.mock.ts`）: Article Analysisの結果とユーザーの過去の理解（`userKnowledge`）を照合し、「何を説明すべきか」を判定。モック実装はLLMを使わず、concept名の文字列一致だけで「既知/未知」を振り分ける簡易ロジックです。**まだどのルートからも呼ばれていません**（ユーザーの理解履歴を保存する仕組み自体が未実装のため）。
-- **3. Knowledge Extraction**（`llm/knowledgeExtraction.ts` / `knowledgeExtraction.mock.ts`）: 深掘り対話のログ（`conversation`）から、新しく理解したと思われる知識の"候補"（`KnowledgeCandidate`）を抽出。AIが理解を勝手に確定させないよう、あくまで候補を返すだけで、保存の可否はユーザーが決める設計です。**まだどのルートからも呼ばれていません**（深掘り対話UI自体が未実装のため）。
+- **3. Knowledge Extraction**（`llm/knowledgeExtraction.ts` / `knowledgeExtraction.mock.ts`）: 深掘り対話のログ（`conversation`）から、新しく理解したと思われる知識の"候補"（`KnowledgeCandidate`）を抽出。AIが理解を勝手に確定させないよう、あくまで候補を返すだけで、保存の可否はユーザーが決める設計です。**まだどのルートからも呼ばれていません**（今回`/api/deep-dive`は実装しましたが、そこでの対話ログをKnowledge Extractionに渡す導線はまだ未実装です）。
+- **4. Deep Dive**（`llm/deepDive.ts` / `deepDive.mock.ts`）: Article Analysisの結果・質問（`question`）・これまでの会話（`conversationHistory`）から、その場の回答（`answer`）・関連する前提知識（`relatedConcepts`）・次の質問候補（`suggestedFollowUps`）を生成。`backend/src/deepDive.ts`から呼ばれ、`POST /api/deep-dive`のレスポンスになります。モック実装は、`relatedConcepts`をArticle Analysisの`concepts`から、`suggestedFollowUps`を`deepDiveQuestions`（今回の質問を除く）から実際に組み立てており、`answer`のみ固定文言です。
 
 ## 環境変数（`.env`）
 
@@ -170,10 +192,11 @@ npm run dev
 
 ## 今後の拡張ポイント（未実装）
 
-- `llm/articleAnalysis.mock.ts` を実際のLLM API呼び出しに差し替える（`ArticleAnalysisService`インターフェースは変えずに済む想定）
-- `POST /api/dig` 以外のルートからPersonalized Analysis・Knowledge Extractionを呼び出す導線（ユーザーの理解履歴のデータモデル・深掘り対話UIが前提）
+- `llm/articleAnalysis.mock.ts`・`llm/deepDive.mock.ts` を実際のLLM API呼び出しに差し替える（各`XxxService`インターフェースは変えずに済む想定）
+- `POST /api/deep-dive`の対話ログをKnowledge Extractionに渡す導線（「理解したことを抽出・保存」の仕組み）
+- Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提）
 - JavaScriptレンダリングが必要なサイトへの対応（ヘッドレスブラウザの導入）
-- 解析結果・ユーザーの理解履歴のMongoDBへの永続化
+- 解析結果・深掘りの会話履歴・ユーザーの理解履歴のMongoDBへの永続化
 - ルーティングが増えた場合の分割（現状は `index.ts` に直書き）
 - リクエストバリデーションの共通化（Honoの `@hono/zod-validator` 等。`llm/`ではすでにzodを導入済み）
 - MongoDBのコレクション/スキーマ定義（現状は接続確認のみで、業務データは未設計）
