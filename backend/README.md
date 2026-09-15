@@ -216,11 +216,22 @@ gcloud auth application-default login
 | 変数名 | 説明 | 例 |
 | --- | --- | --- |
 | `LLM_PROVIDER` | `mock`（デフォルト）または `vertex` | `vertex` |
-| `GCP_PROJECT_ID` | Vertex AIを使うGCPプロジェクトID | `my-project-123` |
-| `GCP_LOCATION` | Vertex AIのリージョン | `us-central1` |
-| `GEMINI_MODEL` | 使用するGeminiのモデルID | （コストと速度を優先するFlash系モデル。実際の正式なモデルIDは[Vertex AIの公式ドキュメント](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash)を参照して設定してください） |
+| `GCP_PROJECT_ID` | Vertex AIを使うGCPプロジェクトID | `digger-508713` |
+| `GCP_LOCATION` | Vertex AIのリージョン（または`global`。後述） | `asia-northeast1` |
+| `GEMINI_MODEL` | 使用するGeminiのモデルID | `gemini-2.5-flash`（コストと速度優先の実運用確認済み設定） |
 
 モデルIDはコードにハードコードしていないため、新しいモデルが出た場合も環境変数の変更だけで切り替えられます。
+
+**モデルの利用可否はリージョンごとに異なります。** 実際に`digger-508713`プロジェクトで検証した結果は以下の通りです（あくまで検証時点のスナップショットで、モデルの提供状況は変わります）。
+
+| モデルID | `asia-northeast1` | `us-central1` | `global` |
+| --- | --- | --- | --- |
+| `gemini-2.5-flash` | ✅ | ✅ | ✅ |
+| `gemini-2.5-flash-lite` | ❌ (404) | ✅ | 未検証 |
+| `gemini-flash-latest` | ❌ (404) | ❌ (404) | ✅ |
+| `gemini-3.5-flash-lite` | ❌ (404) | ❌ (404) | ✅ |
+
+`GCP_LOCATION=global`という特別な値を指定すると、Vertex AIが利用可能なリージョンへ自動的にルーティングします。**新しいモデルほど、まず`global`でのみ提供され、その後個別リージョンに展開される傾向があります**（上表の`gemini-flash-latest`/`gemini-3.5-flash-lite`はこのパターン）。一方で`global`は「どの地理的リージョンで処理されるか」を自分で制御できないため、データレジデンシー要件がある場合は特定リージョンを指定してください。Diggerは現状そうした要件がないため、`asia-northeast1` + `gemini-2.5-flash`（両リージョン・`global`いずれでも動作確認済み）をひとまずの既定値としています。新しいモデルを試したい場合は`GEMINI_MODEL`（および必要なら`GCP_LOCATION=global`）を変更するだけで切り替えられます。
 
 ### 5. Docker環境から認証する場合の注意
 

@@ -9,3 +9,6 @@ dist/
 # GCPサービスアカウントキー等を誤ってコミットしないための保険（ADCを使うため通常は不要）
 *service-account*.json
 *-key.json
+
+# Docker ComposeでVertex AI等をローカル確認する際の個人環境用オーバーライド（例: ~/.config/gcloud のマウント）
+docker-compose.override.yml
