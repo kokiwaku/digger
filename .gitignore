@@ -5,3 +5,7 @@ dist/
 *.log
 .DS_Store
 *.tsbuildinfo
+
+# GCPサービスアカウントキー等を誤ってコミットしないための保険（ADCを使うため通常は不要）
+*service-account*.json
+*-key.json

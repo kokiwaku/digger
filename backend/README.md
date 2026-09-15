@@ -11,26 +11,37 @@ backend/
 │   ├── db.ts                        # MongoDB接続クライアントの生成・pingヘルパー
 │   ├── dig.ts                         # /api/dig のURLバリデーションと解析結果の組み立て
 │   ├── deepDive.ts                     # /api/deep-dive のリクエスト検証と回答の組み立て
-│   ├── articleFetcher.ts               # 記事HTMLの取得（リダイレクト追跡）とReadabilityによる本文/タイトル抽出
-│   ├── network.ts                       # SSRF対策（private/loopback/link-localホストの拒否）
-│   ├── robots.ts                         # robots.txtの取得・パース・許可判定
-│   ├── errors.ts                           # ArticleFetchError（記事取得系エラーの共通型）
-│   ├── types.ts                             # /api/dig のリクエスト/レスポンス型
-│   ├── network.test.ts                       # network.ts のユニットテスト
-│   ├── robots.test.ts                         # robots.ts のユニットテスト
-│   └── llm/                                    # LLMを使う4処理の型・schema・interface・モック実装
-│       ├── conversation.ts                       # 会話ターンの共通型（Knowledge Extraction / Deep Diveで共用）
-│       ├── articleAnalysis.ts                    # 型・zod schema・ArticleAnalysisService interface
-│       ├── articleAnalysis.mock.ts                # モック実装（固定のデモ用サンプルを返す）
-│       ├── articleAnalysis.mock.test.ts            # モック実装のユニットテスト
-│       ├── personalizedAnalysis.ts                   # 型・zod schema・PersonalizedAnalysisService interface
-│       ├── personalizedAnalysis.mock.ts               # モック実装（concept名の単純一致で既知/未知を判定）
-│       ├── personalizedAnalysis.mock.test.ts           # モック実装のユニットテスト
-│       ├── knowledgeExtraction.ts                        # 型・zod schema・KnowledgeExtractionService interface
-│       ├── knowledgeExtraction.mock.ts                     # モック実装（固定の候補を1件返す）
-│       ├── deepDive.ts                                       # 型・zod schema・DeepDiveService interface
-│       ├── deepDive.mock.ts                                   # モック実装（記事の解析結果から応答を組み立てる）
-│       └── deepDive.mock.test.ts                               # モック実装のユニットテスト
+│   ├── llmTest.ts                       # /api/llm/test（開発用のLLM疎通確認API）のロジック
+│   ├── articleFetcher.ts                 # 記事HTMLの取得（リダイレクト追跡）とReadabilityによる本文/タイトル抽出
+│   ├── network.ts                         # SSRF対策（private/loopback/link-localホストの拒否）
+│   ├── robots.ts                           # robots.txtの取得・パース・許可判定
+│   ├── errors.ts                             # ArticleFetchError（記事取得系エラーの共通型）
+│   ├── types.ts                               # /api/dig のリクエスト/レスポンス型
+│   ├── network.test.ts                         # network.ts のユニットテスト
+│   ├── robots.test.ts                           # robots.ts のユニットテスト
+│   ├── llmTest.test.ts                           # llmTest.ts のユニットテスト
+│   └── llm/                                        # LLMを使う4処理の型・schema・interface・モック実装
+│       ├── conversation.ts                           # 会話ターンの共通型（Knowledge Extraction / Deep Diveで共用）
+│       ├── articleAnalysis.ts                        # 型・zod schema・ArticleAnalysisService interface
+│       ├── articleAnalysis.mock.ts                    # モック実装（固定のデモ用サンプルを返す）
+│       ├── articleAnalysis.mock.test.ts                # モック実装のユニットテスト
+│       ├── personalizedAnalysis.ts                       # 型・zod schema・PersonalizedAnalysisService interface
+│       ├── personalizedAnalysis.mock.ts                   # モック実装（concept名の単純一致で既知/未知を判定）
+│       ├── personalizedAnalysis.mock.test.ts               # モック実装のユニットテスト
+│       ├── knowledgeExtraction.ts                            # 型・zod schema・KnowledgeExtractionService interface
+│       ├── knowledgeExtraction.mock.ts                         # モック実装（固定の候補を1件返す）
+│       ├── deepDive.ts                                           # 型・zod schema・DeepDiveService interface
+│       ├── deepDive.mock.ts                                       # モック実装（記事の解析結果から応答を組み立てる）
+│       ├── deepDive.mock.test.ts                                   # モック実装のユニットテスト
+│       └── provider/                                                 # LLMプロバイダー抽象化層（Vertex AI/Geminiなど）
+│           ├── llmProvider.ts                                          # LlmProvider interface（generateTextのみ）
+│           ├── llmProviderError.ts                                      # LlmProviderError と安全なAPIレスポンスへの変換
+│           ├── llmProviderError.test.ts                                  # 上記のユニットテスト
+│           ├── mockLlmProvider.ts                                        # モック実装（固定文言を返す）
+│           ├── vertexGeminiProvider.ts                                    # Vertex AI Gemini実装（@google/genai使用）
+│           ├── vertexGeminiProvider.test.ts                                # エラー分類ロジック等のユニットテスト（ネットワーク未使用）
+│           ├── llmProviderFactory.ts                                        # LLM_PROVIDER環境変数によるprovider切り替え
+│           └── llmProviderFactory.test.ts                                    # 上記のユニットテスト
 ├── Dockerfile
 ├── tsconfig.json
 └── package.json
@@ -70,6 +81,17 @@ flowchart TD
     DDS -->|DeepDiveResponse| DD
     DD --> M
 
+    B --> T["POST /api/llm/test"]
+    T -->|"{ message }"| LT["llmTest.ts<br/>callLlmTest"]
+    LT -->|"getLlmProvider()"| PF["llm/provider/llmProviderFactory.ts"]
+    PF -->|"LLM_PROVIDER=mock"| MP["mockLlmProvider.ts"]
+    PF -->|"LLM_PROVIDER=vertex"| VP["vertexGeminiProvider.ts<br/>(@google/genai)"]
+    VP -->|"generateContent()"| VX[("Vertex AI<br/>Gemini")]
+    MP -->|string| LT
+    VX -->|text| VP
+    VP -->|string / LlmProviderError| LT
+    LT --> T
+
     A -->|"serve()"| G["@hono/node-server<br/>:8787"]
 ```
 
@@ -87,12 +109,14 @@ flowchart TD
 - **`dig.ts`**: `parseArticleUrl()` がリクエストの `url` を検証（未指定・不正な形式・http/https以外のプロトコルはエラー）。`buildDigResult()` が `fetchArticle()` で取得した実際の `title`/`textContent` を `llm/articleAnalysis.mock.ts` の `ArticleAnalysisService` に渡し、その結果と組み合わせて `DigResult` を返します。
 - **`deepDive.ts`**: `parseDeepDiveInput()` がリクエストボディを `llm/deepDive.ts` の `deepDiveInputSchema` でそのまま検証（`articleAnalysis`/`question`/`conversationHistory`/`userKnowledge?`の形が正しいか）。`buildDeepDiveResponse()` が `llm/deepDive.mock.ts` の `DeepDiveService` を呼び出すだけの薄いラッパーです。
 - **`types.ts`**: `/api/dig` のリクエスト型（`DigRequest`）とレスポンス型（`DigResult` / `DigSource`、および `llm/articleAnalysis.ts` の `ArticleAnalysis`）を定義。frontend側の `src/types.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。`/api/deep-dive` は `llm/deepDive.ts` の型をそのままリクエスト/レスポンス型として使うため、`types.ts` に重複定義はありません。
-- **`llm/`**: LLMを使う4処理（後述）の型・schema・interface・モック実装。
-- 現時点でルートは4つ:
+- **`llm/`**: LLMを使う4処理（後述）の型・schema・interface・モック実装、および`llm/provider/`（Vertex AI等のプロバイダー抽象化層。後述）。
+- **`llmTest.ts`**: 開発用の疎通確認API `POST /api/llm/test` のロジック。リクエストの`message`をzodで検証し、`llm/provider/`の`getLlmProvider()`が返す`LlmProvider`（デフォルトはモック）の`generateText()`を、固定のsystem promptと一緒に呼ぶだけです。Diggerの業務ロジック（Article Analysis等）はまだ関与しません。
+- 現時点でルートは5つ:
   - `GET /api/health` — プロセスが生きていることの確認（DBには触れない）
   - `GET /api/health/db` — `pingDatabase()` を呼び、成功なら `200 { status: "ok", db: "connected" }`、失敗なら `503 { status: "error", db: "disconnected", message }`
   - `POST /api/dig` — `{ url: string }` を受け取り、URLバリデーション失敗またはSSRF対象ホストは `400`、robots.txtにより不許可なら `403`、記事取得・抽出・Article Analysisに成功すれば `200` で `DigResult`、それ以外の取得・抽出失敗は `422`（本文抽出失敗・非HTML）または `502`（アクセス失敗・非2xx・ホスト名解決失敗）で `{ error: string }`
   - `POST /api/deep-dive` — `{ articleAnalysis, question, conversationHistory, userKnowledge? }` を受け取り、schemaバリデーション失敗は `400`、成功すれば `200` で `DeepDiveResponse`（`answer`/`relatedConcepts`/`suggestedFollowUps`）、それ以外の失敗は `502` で `{ error: string }`
+  - `POST /api/llm/test` — 開発用のLLM疎通確認API（後述）。`{ message: string }` を受け取り、バリデーション失敗は `400`、成功すれば `200` で `{ response: string }`、LLMプロバイダー側のエラーは原因に応じて `500`/`502`/`504` で `{ error: string }`（安全な汎用メッセージのみ。詳細はサーバーログへ）
 
 ## LLM処理（Article Analysis / Personalized Analysis / Knowledge Extraction / Deep Dive）
 
@@ -136,6 +160,86 @@ flowchart LR
 - **3. Knowledge Extraction**（`llm/knowledgeExtraction.ts` / `knowledgeExtraction.mock.ts`）: 深掘り対話のログ（`conversation`）から、新しく理解したと思われる知識の"候補"（`KnowledgeCandidate`）を抽出。AIが理解を勝手に確定させないよう、あくまで候補を返すだけで、保存の可否はユーザーが決める設計です。**まだどのルートからも呼ばれていません**（今回`/api/deep-dive`は実装しましたが、そこでの対話ログをKnowledge Extractionに渡す導線はまだ未実装です）。
 - **4. Deep Dive**（`llm/deepDive.ts` / `deepDive.mock.ts`）: Article Analysisの結果・質問（`question`）・これまでの会話（`conversationHistory`）から、その場の回答（`answer`）・関連する前提知識（`relatedConcepts`）・次の質問候補（`suggestedFollowUps`）を生成。`backend/src/deepDive.ts`から呼ばれ、`POST /api/deep-dive`のレスポンスになります。モック実装は、`relatedConcepts`をArticle Analysisの`concepts`から、`suggestedFollowUps`を`deepDiveQuestions`（今回の質問を除く）から実際に組み立てており、`answer`のみ固定文言です。
 
+> **注記**: 上記4処理（`ArticleAnalysisService`等）自体はまだ`llm/provider/`（次項）を使っておらず、それぞれの`*.mock.ts`が固定値を返すだけです。これらを実LLM化する際は、各処理の実装（例: `articleAnalysis.gemini.ts`）が内部で`llm/provider/`の`LlmProvider`を呼び、返ってきたテキストを対応するzod schemaで検証してから構造化データとして返す、という形になる想定です。
+
+## LLMプロバイダー層（`llm/provider/`）
+
+Article Analysis等の各LLM処理が「どのAIベンダーを使うか」を意識しないで済むよう、生成AI呼び出しそのものを抽象化する薄いレイヤーです。今回のタスクでは、この層を新設して**Vertex AI (Gemini) への最小限の疎通確認**を行うところまでを実装しました（Article Analysis等の実LLM化はまだ行っていません）。
+
+```ts
+// llm/provider/llmProvider.ts
+export interface LlmProvider {
+  generateText(input: { systemPrompt?: string; prompt: string }): Promise<string>;
+}
+```
+
+- **`llmProvider.ts`**: 上記の`LlmProvider` interfaceのみを定義。`ArticleAnalysisService`等の既存interfaceとは別レイヤー（既存interfaceは「記事を解析して構造化データを返す」というDigger固有の処理、`LlmProvider`は「テキストを1回生成する」という汎用的な処理）なので、新設しても既存interfaceの乱立にはあたりません。
+- **`mockLlmProvider.ts`**: `MockLlmProvider`。受け取った`prompt`を埋め込んだ固定文言を返すだけで、外部通信は一切行いません。
+- **`vertexGeminiProvider.ts`**: `VertexGeminiProvider`。[`@google/genai`](https://www.npmjs.com/package/@google/genai)（Googleの統一Gen AI SDK。Vertex AIとGemini Developer APIの両方に対応し、旧来の`@google-cloud/vertexai`はGemini 2.0以降の新機能を受け取らないため今回は不採用）を使い、`GCP_PROJECT_ID`/`GCP_LOCATION`/`GEMINI_MODEL`（すべて環境変数、コードにモデル名はハードコードしない）でVertex AI上のGeminiを呼び出します。認証は明示的なAPIキーではなくApplication Default Credentials（ADC）任せにしています（後述）。タイムアウトは`AbortController`で30秒に設定（`REQUEST_TIMEOUT_MS`）。
+  - `classifyVertexError()`という純粋関数でエラーを分類しています（ネットワークを使わないので単体テスト可能）: `AbortError`→`timeout`、HTTP `401`/`403`→`auth_failed`、HTTP `404`→`invalid_model`、ADC関連のエラーメッセージ→`auth_failed`、それ以外→`api_error`。呼び出し自体は成功したがテキストが空の場合は`empty_response`。
+- **`llmProviderError.ts`**: `LlmProviderError`（`config_missing`/`auth_failed`/`invalid_model`/`timeout`/`api_error`/`empty_response`のいずれかの`code`を持つ）と、それを安全なHTTPレスポンス（ステータスコード＋汎用メッセージ）に変換する`toSafeApiResponse()`。**ユーザー向けレスポンスには元のエラーメッセージ（credentialや内部情報を含み得る）を含めず**、詳細はサーバーログにのみ出力します（`index.ts`の`console.error`）。
+- **`llmProviderFactory.ts`**: `getLlmProvider()`が環境変数`LLM_PROVIDER`（`mock` | `vertex`、デフォルト`mock`）を見て、対応する`LlmProvider`実装を返すだけの単純なswitch文です。DIコンテナ等は導入していません。
+
+## Vertex AI (Gemini) のセットアップ
+
+`LLM_PROVIDER=vertex`で実際にGoogle Cloud Vertex AI上のGeminiを呼び出す場合に必要な手順です。`LLM_PROVIDER=mock`（デフォルト）のままであれば、この節の作業は不要です。
+
+### 1. GCPプロジェクトを選択
+
+Vertex AIを使うGoogle Cloudプロジェクトを用意し、プロジェクトIDを控えます（`gcloud projects list`または[Cloud Console](https://console.cloud.google.com/)で確認できます）。課金が有効なプロジェクトである必要があります。
+
+### 2. Vertex AI APIを有効化
+
+```bash
+gcloud config set project <YOUR_PROJECT_ID>
+gcloud services enable aiplatform.googleapis.com
+```
+
+（Cloud Consoleの場合は「Vertex AI API」を検索して有効化）
+
+### 3. ローカル開発用のApplication Default Credentials設定
+
+サービスアカウントキーJSONはリポジトリは元よりローカルにも保存せず、`gcloud` CLIが発行するApplication Default Credentials（ADC）を使います。
+
+```bash
+gcloud auth application-default login
+```
+
+ブラウザでの認証後、認証情報が`~/.config/gcloud/application_default_credentials.json`（macOS/Linux）に保存されます。このファイルは`.gitignore`済みの場所にあり、リポジトリには含まれません。`@google/genai`は`vertexai: true`で初期化するとこのADCを自動的に見つけて使うため、コード側でキーファイルのパスを指定する必要はありません。
+
+自分のユーザーに`roles/aiplatform.user`相当の権限（Vertex AI呼び出し権限）が付与されている必要があります。権限がない場合はプロジェクトの管理者に付与を依頼してください。
+
+### 4. 必要な環境変数
+
+`backend/.env.example`にある以下をコピーして設定します（`cp .env.example .env`）。
+
+| 変数名 | 説明 | 例 |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `mock`（デフォルト）または `vertex` | `vertex` |
+| `GCP_PROJECT_ID` | Vertex AIを使うGCPプロジェクトID | `my-project-123` |
+| `GCP_LOCATION` | Vertex AIのリージョン | `us-central1` |
+| `GEMINI_MODEL` | 使用するGeminiのモデルID | （コストと速度を優先するFlash系モデル。実際の正式なモデルIDは[Vertex AIの公式ドキュメント](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash)を参照して設定してください） |
+
+モデルIDはコードにハードコードしていないため、新しいモデルが出た場合も環境変数の変更だけで切り替えられます。
+
+### 5. Docker環境から認証する場合の注意
+
+ADCの認証情報ファイル（`~/.config/gcloud/`以下）はホストマシンにあるため、コンテナ内のプロセスからは何もしなければ見えません。Docker Composeで`LLM_PROVIDER=vertex`を試す場合は、このディレクトリをコンテナへ**読み取り専用でマウント**する必要があります。
+
+```yaml
+# docker-compose.yml の backend サービスに追加する例
+services:
+  backend:
+    volumes:
+      - ./backend:/app
+      - backend_node_modules:/app/node_modules
+      - ~/.config/gcloud:/root/.config/gcloud:ro # ADCをコンテナへ渡す（読み取り専用）
+```
+
+このリポジトリの`docker-compose.yml`にはデフォルトでこのマウントを含めていません（`gcloud`未導入の環境で`docker compose up`しても空ディレクトリが作られないようにするため）。Vertex AIをDocker経由で試す場合のみ、上記のように自分の環境で追記してください。またリポジトリ直下の`.env.example`を`.env`にコピーすると、`docker compose`が`LLM_PROVIDER`/`GCP_PROJECT_ID`/`GCP_LOCATION`/`GEMINI_MODEL`を読み込みます（`backend/.env`とは別ファイルです。Docker Composeの変数展開はプロジェクト直下の`.env`からのみ行われるため）。
+
+コンテナ内のホームディレクトリがマウント先と一致している必要があります（このリポジトリの`backend/Dockerfile`は`node:22-slim`をベースにしており、`USER`指定がないためroot実行＝`HOME=/root`です。上記の`/root/.config/gcloud`はそれに合わせています）。
+
 ## 環境変数（`.env`）
 
 `.env.example` をコピーして使用します。
@@ -146,8 +250,12 @@ flowchart LR
 | `MONGODB_URI` | MongoDB接続文字列 | `mongodb://localhost:27017` |
 | `MONGODB_DB_NAME` | 使用するDB名 | `digger` |
 | `FRONTEND_ORIGIN` | CORSで許可するオリジン（フロントエンドのURL） | `http://localhost:5173` |
+| `LLM_PROVIDER` | 使用するLLMプロバイダー（`mock` または `vertex`） | `mock` |
+| `GCP_PROJECT_ID` | Vertex AIを使うGCPプロジェクトID（`LLM_PROVIDER=vertex`時のみ必須） | 未設定 |
+| `GCP_LOCATION` | Vertex AIのリージョン（`LLM_PROVIDER=vertex`時のみ必須） | 未設定 |
+| `GEMINI_MODEL` | 使用するGeminiのモデルID（`LLM_PROVIDER=vertex`時のみ必須） | 未設定 |
 
-いずれも `process.env` から直接読み込んでおり（`dotenv`等は未使用）、`npm run dev`（`tsx watch`）実行時にOS/シェル側で環境変数が読み込まれている前提です。Docker Compose経由の場合は `docker-compose.yml` の `environment` で注入されます。
+いずれも `process.env` から直接読み込んでおり（`dotenv`等は未使用）、`npm run dev`（`tsx watch`）実行時にOS/シェル側で環境変数が読み込まれている前提です。Docker Compose経由の場合は `docker-compose.yml` の `environment` で注入されます（Vertex AI関連の変数は[前述](#vertex-ai-gemini-のセットアップ)の通りプロジェクト直下の`.env`から読み込まれます）。
 
 ## スクリプト
 
@@ -156,7 +264,7 @@ flowchart LR
 | `npm run dev` | `tsx watch src/index.ts` — ソース変更を検知して自動再起動する開発サーバー |
 | `npm run build` | `tsc -p tsconfig.json` — `dist/` にコンパイル（`*.test.ts` は除外） |
 | `npm start` | `node dist/index.js` — ビルド済みファイルを実行（本番想定） |
-| `npm test` | `tsx --test src/*.test.ts src/llm/*.test.ts` — Node.js標準の`node:test`ランナーでユニットテストを実行 |
+| `npm test` | `tsx --test src/*.test.ts src/llm/*.test.ts src/llm/provider/*.test.ts` — Node.js標準の`node:test`ランナーでユニットテストを実行。**Vertex AIへの実際の通信は行わない**（`classifyVertexError`等の純粋関数のみテスト） |
 
 ## 依存関係
 
@@ -165,6 +273,7 @@ flowchart LR
 - `mongodb` — MongoDB公式Node.jsドライバ
 - `jsdom` — 取得したHTMLをパースしてDOMを構築するライブラリ（Node.js上でDOM APIを再現）
 - `@mozilla/readability` — `jsdom`で構築したDOMから記事本文・タイトルを抽出するライブラリ（Firefoxリーダービューと同じエンジン）
+- `@google/genai` — Google Cloudの統一Gen AI SDK。Vertex AI上のGeminiを`llm/provider/vertexGeminiProvider.ts`から呼び出すために使用（採用理由は[LLMプロバイダー層](#llmプロバイダー層llmprovider)を参照）
 - `zod` — LLM入出力の型定義とruntime validationに使用（`llm/`配下）。テストは追加ライブラリなしでNode.js標準の`node:test`を使用
 - `tsx` — TypeScriptをトランスパイルなしで直接実行する開発用ランナー（ウォッチモード対応）
 
@@ -180,6 +289,15 @@ npm run dev
 
 `http://localhost:8787/api/health` と `http://localhost:8787/api/health/db` で確認できます（MongoDBが別途起動している必要があります）。
 
+LLMの疎通確認（`LLM_PROVIDER=mock`のままでも、`vertex`に設定してVertex AIの実際の応答を試す場合でも）は以下で行えます。
+
+```bash
+curl -X POST http://localhost:8787/api/llm/test \
+  -H "Content-Type: application/json" \
+  -d '{"message": "日本の中央銀行は何ですか？"}'
+# => {"response":"..."}
+```
+
 ## 記事取得が対応できないケース
 
 - **JavaScriptレンダリングが必須のSPA**: 素の`fetch`でHTMLを取得するだけなので、クライアントサイドでDOMを組み立てるサイトは本文が空になり抽出失敗（`422`）になります（ヘッドレスブラウザ未導入）。
@@ -192,7 +310,9 @@ npm run dev
 
 ## 今後の拡張ポイント（未実装）
 
-- `llm/articleAnalysis.mock.ts`・`llm/deepDive.mock.ts` を実際のLLM API呼び出しに差し替える（各`XxxService`インターフェースは変えずに済む想定）
+- `llm/articleAnalysis.mock.ts`・`llm/deepDive.mock.ts` を、`llm/provider/`の`LlmProvider`（Vertex AI Gemini）を使う実装に差し替える（各`XxxService`インターフェースは変えずに済む想定。詳細は本READMEの[LLM処理](#llm処理article-analysis--personalized-analysis--knowledge-extraction--deep-dive)節の注記を参照）
+- `POST /api/llm/test`は開発用の疎通確認APIのため、Article Analysis等への接続が進んだら削除する
+- structured output（JSON Schema等でLLMに構造化データを直接生成させる方式）の導入。現状は生テキストのみで、構造化データへの変換はzod schemaでの後段検証に頼っている
 - `POST /api/deep-dive`の対話ログをKnowledge Extractionに渡す導線（「理解したことを抽出・保存」の仕組み）
 - Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提）
 - JavaScriptレンダリングが必要なサイトへの対応（ヘッドレスブラウザの導入）

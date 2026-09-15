@@ -17,6 +17,10 @@ services:
       MONGODB_URI: mongodb://mongo:27017
       MONGODB_DB_NAME: digger
       FRONTEND_ORIGIN: http://localhost:5173
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+      GCP_LOCATION: ${GCP_LOCATION:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
     volumes:
       - ./backend:/app
       - backend_node_modules:/app/node_modules

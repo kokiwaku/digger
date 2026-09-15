@@ -135,6 +135,7 @@ docker compose up --build
   - `GET /api/health/db` — Hono → MongoDB の接続確認
   - `POST /api/dig` — URLを受け取り、記事解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
   - `POST /api/deep-dive` — 解析結果と質問を受け取り、深掘りの回答を返す（[深掘り対話機能](#深掘り対話機能)を参照）
+  - `POST /api/llm/test` — 開発用のLLM疎通確認API。詳細は [`backend/README.md`](backend/README.md#vertex-ai-gemini-のセットアップ) を参照
 - MongoDB: `mongodb://localhost:27017`（ホストからも接続可能）
 
 フロントエンドの画面 (http://localhost:5173) を開くと、URL入力欄と「掘る」ボタンが表示されます。記事URLを入力して「掘る」を押すと解析結果が表示され、その下から自由入力や質問候補のクリックで深掘りができます。
@@ -206,9 +207,9 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、およびGoogle Cloud Vertex AI（Gemini）への最小限の疎通確認は実装済みですが、以下は未実装・未設計です。
 
-- Article Analysis・Deep Dive（`backend/src/llm/`）を実際のLLM APIに接続する
+- Article Analysis・Deep Dive（`backend/src/llm/`）を、実装済みのVertex AI疎通確認（`llm/provider/`）を使って実際に接続する
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線と、ユーザーの理解履歴のデータモデル
 - Knowledge Extraction（深掘り対話から学習候補を抽出するLLM処理）を実際の深掘り対話（`/api/deep-dive`）に接続する
 - 解析結果・深掘りの会話履歴・ユーザーの理解履歴のMongoDBへの永続化
