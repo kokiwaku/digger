@@ -5,6 +5,8 @@ import { pingDatabase } from "./db.js";
 import { buildDigResult, parseArticleUrl } from "./dig.js";
 import { ArticleFetchError } from "./articleFetcher.js";
 import { buildDeepDiveResponse, parseDeepDiveInput } from "./deepDive.js";
+import { callLlmTest, parseLlmTestInput } from "./llmTest.js";
+import { LlmProviderError, toSafeApiResponse } from "./llm/provider/llmProviderError.js";
 import type { DigRequest } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -68,6 +70,36 @@ app.post("/api/deep-dive", async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "深掘り回答の生成に失敗しました";
     return c.json({ error: message }, 502);
+  }
+});
+
+// 開発用の疎通確認API。Diggerの業務ロジックはまだ関与しない。
+app.post("/api/llm/test", async (c) => {
+  const body = await c.req.json().catch(() => null);
+
+  let message: string;
+  try {
+    message = parseLlmTestInput(body);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "invalid request";
+    return c.json({ error: errorMessage }, 400);
+  }
+
+  try {
+    const response = await callLlmTest(message);
+    return c.json({ response });
+  } catch (err) {
+    if (err instanceof LlmProviderError) {
+      console.error("[api/llm/test] LLM provider error", {
+        code: err.code,
+        message: err.message,
+        cause: err.cause,
+      });
+      const { status, message: safeMessage } = toSafeApiResponse(err);
+      return c.json({ error: safeMessage }, status);
+    }
+    console.error("[api/llm/test] unexpected error", err);
+    return c.json({ error: "予期しないエラーが発生しました" }, 500);
   }
 });
 
