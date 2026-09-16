@@ -76,7 +76,7 @@
 .result {
   display: flex;
   flex-direction: column;
-  gap: 1.75rem;
+  gap: 1.5rem;
 }
 
 .result-title {
@@ -107,18 +107,47 @@
   line-height: 1.7;
 }
 
-.section-subtle {
-  margin: 0.6rem 0 0;
-  font-size: 0.9rem;
-  color: #666;
-  line-height: 1.6;
-}
-
 .primary-card {
   padding: 1.1rem 1.25rem;
   border-radius: 12px;
   background: #fafafa;
   border: 1px solid #eee;
+}
+
+.premise-line {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #777;
+  line-height: 1.6;
+}
+
+.premise-label {
+  font-weight: 600;
+  color: #555;
+}
+
+/* 気になることを聞いてみる（Primary Viewの主役） */
+.ask-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.5rem 0;
+}
+
+.ask-heading {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.ask-subtext {
+  margin: 0 0 0.5rem;
+  color: #666;
+  font-size: 0.95rem;
+}
+
+.hint-area {
+  margin-top: 0.25rem;
 }
 
 .link-button {
@@ -147,33 +176,6 @@
   border-top: 1px solid #eee;
 }
 
-.card-toggle-hint {
-  display: block;
-  margin-top: 0.4rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #2b6cb0;
-}
-
-.entity-item {
-  padding: 0.75rem 1rem;
-  border: 1px solid #ddd;
-  border-radius: 10px;
-  background: #fafafa;
-}
-
-.entity-name {
-  margin: 0 0 0.2rem;
-  font-weight: 600;
-}
-
-.entity-description {
-  margin: 0;
-  font-size: 0.9rem;
-  color: #555;
-  line-height: 1.6;
-}
-
 .card-list {
   list-style: none;
   margin: 0;
@@ -183,7 +185,6 @@
   gap: 0.6rem;
 }
 
-.concept-card,
 .question-button {
   width: 100%;
   text-align: left;
@@ -193,28 +194,34 @@
   background: #fafafa;
   cursor: pointer;
   font: inherit;
+  font-weight: 500;
 }
 
-.concept-card:hover,
 .question-button:hover {
   border-color: #2b6cb0;
   background: #f2f7fc;
 }
 
-.concept-card-title {
-  margin: 0 0 0.25rem;
+.concept-item,
+.entity-item {
+  padding: 0.75rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.concept-item-title,
+.entity-name {
+  margin: 0 0 0.2rem;
   font-weight: 600;
 }
 
-.concept-card-summary {
+.concept-item-description,
+.entity-description {
   margin: 0;
   font-size: 0.9rem;
   color: #555;
   line-height: 1.6;
-}
-
-.question-button {
-  font-weight: 500;
 }
 
 .connection-list {
@@ -244,7 +251,12 @@
   color: #555;
 }
 
-.deep-dive {
+/* Deep Dive開始後: ChatGPTに近い、余白の多いシンプルな会話UI。
+   記事解析のカード群はここには一切出さない。 */
+.chat-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
   padding-top: 0.5rem;
   border-top: 1px solid #eee;
 }
@@ -252,42 +264,37 @@
 .chat-log {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: 1.5rem;
 }
 
 .chat-bubble {
-  padding: 0.75rem 1rem;
-  border-radius: 10px;
-  max-width: 100%;
+  max-width: 85%;
 }
 
 .chat-user {
-  background: #eef4fb;
   align-self: flex-end;
+  padding: 0.75rem 1rem;
+  border-radius: 14px;
+  background: #eef4fb;
 }
 
-.chat-assistant {
-  background: #fafafa;
-  border: 1px solid #eee;
-}
-
-.chat-role {
-  margin: 0 0 0.25rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #888;
+.chat-message {
+  max-width: 100%;
 }
 
 .chat-content {
   margin: 0;
-  line-height: 1.7;
+  line-height: 1.8;
   white-space: pre-wrap;
+}
+
+.followup-area {
+  margin-top: 0.75rem;
 }
 
 .followup-list {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
 }

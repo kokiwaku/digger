@@ -1,6 +1,6 @@
 import { useState } from "react";
 import "./App.css";
-import type { ArticleAnalysis, Concept, ConversationTurn, DeepDiveResponse, DigResult } from "./types";
+import type { ArticleAnalysis, ConversationTurn, DeepDiveResponse, DigResult } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 
@@ -17,16 +17,12 @@ type ChatMessage =
 type DeepDiveState = { status: "idle" } | { status: "loading" } | { status: "error"; message: string };
 
 // バックエンドが生成する文章量と、最初にユーザーへ見せる文章量は別物として扱う。
-// summary/whyItMattersは長めに返ってくることがあるため、Primary Viewでは冒頭の
-// 数文だけを切り出し、残りはSecondary Information（詳細パネル）でのみ表示する。
+// summaryは長めに返ってくることがあるため、冒頭の数文だけを切り出して表示する
+// （文末記号（。！？）で区切った先頭N文だけを使う単純な方式）。
 function firstSentences(text: string, maxSentences: number): string {
   const sentences = text.match(/[^。！？]*[。！？]|[^。！？]+$/g);
   if (!sentences) return text.trim();
   return sentences.slice(0, maxSentences).join("").trim();
-}
-
-function hasMoreText(full: string, shown: string): boolean {
-  return full.trim().length > shown.trim().length;
 }
 
 async function digUrl(url: string): Promise<DigResult> {
@@ -67,47 +63,26 @@ async function askDeepDive(
   return body as DeepDiveResponse;
 }
 
-// 前提知識カード。初期状態は短い1文だけを表示し、クリックすると全文を展開する
-// （descriptionが1文で収まっている場合は展開の余地がないのでボタン化しない）。
-function ConceptCard({ concept }: { concept: Concept }) {
-  const [expanded, setExpanded] = useState(false);
-  const shortDescription = firstSentences(concept.description, 1);
-  const expandable = hasMoreText(concept.description, shortDescription);
-
-  return (
-    <li>
-      <button
-        type="button"
-        className="concept-card"
-        onClick={() => expandable && setExpanded((v) => !v)}
-        aria-expanded={expandable ? expanded : undefined}
-      >
-        <p className="concept-card-title">{concept.name}</p>
-        <p className="concept-card-summary">{expanded ? concept.description : shortDescription}</p>
-        {expandable && <span className="card-toggle-hint">{expanded ? "閉じる" : "詳しく見る"}</span>}
-      </button>
-    </li>
-  );
-}
-
 export default function App() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<DigState>({ status: "idle" });
 
-  const [detailsExpanded, setDetailsExpanded] = useState(false);
-  const [showAllQuestions, setShowAllQuestions] = useState(false);
-
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [deepDiveState, setDeepDiveState] = useState<DeepDiveState>({ status: "idle" });
+  const [revealedFollowUps, setRevealedFollowUps] = useState<Set<number>>(new Set());
+
+  const [showHints, setShowHints] = useState(false);
+  const [showBackground, setShowBackground] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setState({ status: "loading" });
     setMessages([]);
     setDeepDiveState({ status: "idle" });
-    setDetailsExpanded(false);
-    setShowAllQuestions(false);
+    setRevealedFollowUps(new Set());
+    setShowHints(false);
+    setShowBackground(false);
     try {
       const result = await digUrl(url);
       setState({ status: "success", result });
@@ -138,18 +113,19 @@ export default function App() {
     }
   };
 
+  const toggleFollowUps = (index: number) => {
+    setRevealedFollowUps((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
   const analysis = state.status === "success" ? state.result.analysis : null;
-  const requiredConcepts = analysis?.concepts.filter((c) => c.importance === "required").slice(0, 3) ?? [];
-  const helpfulConcepts = analysis?.concepts.filter((c) => c.importance !== "required") ?? [];
-  const [topQuestion, ...restQuestions] = analysis?.deepDiveQuestions ?? [];
+  const hasStartedChat = messages.length > 0;
   const shortSummary = analysis ? firstSentences(analysis.summary, 3) : "";
-  const shortWhyItMatters = analysis ? firstSentences(analysis.whyItMatters, 1) : "";
-  const hasSecondaryInfo =
-    analysis !== null &&
-    (hasMoreText(analysis.whyItMatters, shortWhyItMatters) ||
-      helpfulConcepts.length > 0 ||
-      analysis.connections.length > 0 ||
-      analysis.entities.length > 0);
+  const premiseNames = analysis?.concepts.slice(0, 4).map((c) => c.name) ?? [];
 
   return (
     <div className="page">
@@ -181,173 +157,186 @@ export default function App() {
             <span className="result-source-url">{state.result.source.url}</span>
           </header>
 
-          <section className="primary-card">
-            <h3 className="section-label">この記事で大事なのは</h3>
-            <p className="section-body">{shortSummary}</p>
-            {shortWhyItMatters && <p className="section-subtle">なぜ重要？ {shortWhyItMatters}</p>}
-          </section>
-
-          {requiredConcepts.length > 0 && (
-            <section>
-              <h3 className="section-label">まず知っておくこと</h3>
-              <ul className="card-list">
-                {requiredConcepts.map((concept) => (
-                  <ConceptCard key={concept.id} concept={concept} />
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {topQuestion && (
-            <section>
-              <h3 className="section-label">次に掘るなら</h3>
-              <ul className="card-list">
-                <li>
-                  <button
-                    type="button"
-                    className="question-button"
-                    disabled={deepDiveState.status === "loading"}
-                    onClick={() => handleDeepDive(topQuestion)}
-                  >
-                    → {topQuestion}
-                  </button>
-                </li>
-              </ul>
-              {restQuestions.length > 0 && !showAllQuestions && (
-                <button type="button" className="link-button" onClick={() => setShowAllQuestions(true)}>
-                  他の質問を見る（{restQuestions.length}件）
-                </button>
-              )}
-              {showAllQuestions && (
-                <ul className="card-list">
-                  {restQuestions.map((deepDiveQuestion) => (
-                    <li key={deepDiveQuestion}>
-                      <button
-                        type="button"
-                        className="question-button"
-                        disabled={deepDiveState.status === "loading"}
-                        onClick={() => handleDeepDive(deepDiveQuestion)}
-                      >
-                        → {deepDiveQuestion}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          )}
-
-          {hasSecondaryInfo && !detailsExpanded && (
-            <button type="button" className="link-button" onClick={() => setDetailsExpanded(true)}>
-              もう少し詳しく見る
-            </button>
-          )}
-
-          {hasSecondaryInfo && detailsExpanded && (
-            <div className="details-panel">
-              <button type="button" className="link-button" onClick={() => setDetailsExpanded(false)}>
-                詳細を閉じる
-              </button>
-
-              <section>
-                <h3 className="section-label">なぜ重要？</h3>
-                <p className="section-body">{analysis.whyItMatters}</p>
+          {!hasStartedChat && (
+            <>
+              <section className="primary-card">
+                <h3 className="section-label">この記事について</h3>
+                <p className="section-body">{shortSummary}</p>
               </section>
 
-              {helpfulConcepts.length > 0 && (
-                <section>
-                  <h3 className="section-label">知っているとさらに理解が深まること</h3>
-                  <ul className="card-list">
-                    {helpfulConcepts.map((concept) => (
-                      <ConceptCard key={concept.id} concept={concept} />
-                    ))}
-                  </ul>
-                </section>
+              {premiseNames.length > 0 && (
+                <p className="premise-line">
+                  <span className="premise-label">この記事の前提: </span>
+                  {premiseNames.join(" ・ ")}
+                </p>
               )}
 
-              {analysis.connections.length > 0 && (
-                <section>
-                  <h3 className="section-label">この話とのつながり</h3>
-                  <ul className="connection-list">
-                    {analysis.connections.map((connection) => (
-                      <li key={connection.topic} className="connection-item">
-                        <p className="connection-topic">{connection.topic}</p>
-                        <p className="connection-relation">→ {connection.relation}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
+              <section className="ask-hero">
+                <h3 className="ask-heading">気になることを聞いてみる</h3>
+                <p className="ask-subtext">この記事について、何が気になりますか？</p>
 
-              {analysis.entities.length > 0 && (
-                <section>
-                  <h3 className="section-label">関連する人物・組織など</h3>
-                  <ul className="card-list">
-                    {analysis.entities.map((entity) => (
-                      <li key={entity.name} className="entity-item">
-                        <p className="entity-name">{entity.name}</p>
-                        {entity.description && <p className="entity-description">{entity.description}</p>}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
+                <form
+                  className="dig-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleDeepDive(question);
+                  }}
+                >
+                  <input
+                    className="dig-input"
+                    type="text"
+                    placeholder="例: そもそも、なぜこうなるの？"
+                    value={question}
+                    onChange={(e) => setQuestion(e.target.value)}
+                  />
+                  <button className="dig-button" type="submit" disabled={deepDiveState.status === "loading"}>
+                    {deepDiveState.status === "loading" ? "掘り下げています..." : "掘り下げる"}
+                  </button>
+                </form>
+
+                {deepDiveState.status === "error" && <p className="error-message">エラー: {deepDiveState.message}</p>}
+
+                {analysis.deepDiveQuestions.length > 0 && (
+                  <div className="hint-area">
+                    {!showHints ? (
+                      <button type="button" className="link-button" onClick={() => setShowHints(true)}>
+                        質問が浮かばないときはヒントを見る
+                      </button>
+                    ) : (
+                      <ul className="card-list">
+                        {analysis.deepDiveQuestions.map((deepDiveQuestion) => (
+                          <li key={deepDiveQuestion}>
+                            <button
+                              type="button"
+                              className="question-button"
+                              disabled={deepDiveState.status === "loading"}
+                              onClick={() => handleDeepDive(deepDiveQuestion)}
+                            >
+                              → {deepDiveQuestion}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              <button type="button" className="link-button" onClick={() => setShowBackground((v) => !v)}>
+                {showBackground ? "背景を閉じる" : "記事の背景を見る"}
+              </button>
+
+              {showBackground && (
+                <div className="details-panel">
+                  <section>
+                    <h3 className="section-label">なぜ重要？</h3>
+                    <p className="section-body">{analysis.whyItMatters}</p>
+                  </section>
+
+                  {analysis.concepts.length > 0 && (
+                    <section>
+                      <h3 className="section-label">前提知識</h3>
+                      <ul className="card-list">
+                        {analysis.concepts.map((concept) => (
+                          <li key={concept.id} className="concept-item">
+                            <p className="concept-item-title">{concept.name}</p>
+                            <p className="concept-item-description">{concept.description}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
+                  {analysis.connections.length > 0 && (
+                    <section>
+                      <h3 className="section-label">この話とのつながり</h3>
+                      <ul className="connection-list">
+                        {analysis.connections.map((connection) => (
+                          <li key={connection.topic} className="connection-item">
+                            <p className="connection-topic">{connection.topic}</p>
+                            <p className="connection-relation">→ {connection.relation}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
+                  {analysis.entities.length > 0 && (
+                    <section>
+                      <h3 className="section-label">関連する人物・組織など</h3>
+                      <ul className="card-list">
+                        {analysis.entities.map((entity) => (
+                          <li key={entity.name} className="entity-item">
+                            <p className="entity-name">{entity.name}</p>
+                            {entity.description && <p className="entity-description">{entity.description}</p>}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                </div>
               )}
-            </div>
+            </>
           )}
 
-          <section className="deep-dive">
-            <h3 className="section-label">他に気になることは？</h3>
-
-            {messages.length > 0 && (
+          {hasStartedChat && (
+            <section className="chat-section">
               <div className="chat-log">
                 {messages.map((message, index) => (
                   <div
                     key={index}
-                    className={message.role === "user" ? "chat-bubble chat-user" : "chat-bubble chat-assistant"}
+                    className={message.role === "user" ? "chat-bubble chat-user" : "chat-message chat-assistant"}
                   >
-                    <p className="chat-role">{message.role === "user" ? "User" : "Digger"}</p>
                     <p className="chat-content">{message.content}</p>
                     {message.role === "assistant" && message.suggestedFollowUps.length > 0 && (
-                      <div className="followup-list">
-                        {message.suggestedFollowUps.map((followUp) => (
-                          <button
-                            key={followUp}
-                            type="button"
-                            className="question-button"
-                            disabled={deepDiveState.status === "loading"}
-                            onClick={() => handleDeepDive(followUp)}
-                          >
-                            → {followUp}
+                      <div className="followup-area">
+                        {!revealedFollowUps.has(index) ? (
+                          <button type="button" className="link-button" onClick={() => toggleFollowUps(index)}>
+                            次の問いを見る
                           </button>
-                        ))}
+                        ) : (
+                          <div className="followup-list">
+                            {message.suggestedFollowUps.map((followUp) => (
+                              <button
+                                key={followUp}
+                                type="button"
+                                className="question-button"
+                                disabled={deepDiveState.status === "loading"}
+                                onClick={() => handleDeepDive(followUp)}
+                              >
+                                → {followUp}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
                 ))}
               </div>
-            )}
 
-            {deepDiveState.status === "error" && <p className="error-message">エラー: {deepDiveState.message}</p>}
+              {deepDiveState.status === "error" && <p className="error-message">エラー: {deepDiveState.message}</p>}
 
-            <form
-              className="dig-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleDeepDive(question);
-              }}
-            >
-              <input
-                className="dig-input"
-                type="text"
-                placeholder="自由に入力してください"
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-              />
-              <button className="dig-button" type="submit" disabled={deepDiveState.status === "loading"}>
-                {deepDiveState.status === "loading" ? "掘り下げています..." : "掘り下げる"}
-              </button>
-            </form>
-          </section>
+              <form
+                className="dig-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleDeepDive(question);
+                }}
+              >
+                <input
+                  className="dig-input"
+                  type="text"
+                  placeholder="さらに気になることを入力..."
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                />
+                <button className="dig-button" type="submit" disabled={deepDiveState.status === "loading"}>
+                  {deepDiveState.status === "loading" ? "掘り下げています..." : "送る"}
+                </button>
+              </form>
+            </section>
+          )}
         </article>
       )}
     </div>
