@@ -76,7 +76,7 @@
 .result {
   display: flex;
   flex-direction: column;
-  gap: 1.75rem;
+  gap: 1.5rem;
 }
 
 .result-title {
@@ -91,6 +91,11 @@
   font-size: 0.8rem;
   color: #888;
   word-break: break-all;
+  text-decoration: none;
+}
+
+.result-source-url:hover {
+  text-decoration: underline;
 }
 
 .section-label {
@@ -107,6 +112,85 @@
   line-height: 1.7;
 }
 
+.intro-summary {
+  margin: 0;
+  line-height: 1.8;
+  color: #333;
+}
+
+/* この記事について、何が気になりますか？（Primary Viewの主役） */
+.ask-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.5rem 0;
+}
+
+.ask-heading {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ask-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.9rem 1rem;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.6;
+  border: 1px solid #ccc;
+  border-radius: 10px;
+  resize: vertical;
+}
+
+.ask-textarea:focus {
+  outline: 2px solid #2b6cb0;
+  outline-offset: 1px;
+}
+
+.ask-submit {
+  align-self: flex-end;
+}
+
+.secondary-links {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.link-button {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  color: #2b6cb0;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-button:hover {
+  color: #1a4971;
+}
+
+.details-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #eee;
+}
+
 .card-list {
   list-style: none;
   margin: 0;
@@ -116,38 +200,47 @@
   gap: 0.6rem;
 }
 
-.concept-card,
-.question-button {
-  width: 100%;
-  text-align: left;
-  padding: 0.9rem 1rem;
-  border: 1px solid #ddd;
-  border-radius: 10px;
-  background: #fafafa;
-  cursor: pointer;
+/* 前提知識: カードではなく、名前だけの軽い行。クリックすると説明を展開する。 */
+.concept-line {
+  background: none;
+  border: none;
+  padding: 0.3rem 0;
   font: inherit;
-}
-
-.concept-card:hover,
-.question-button:hover {
-  border-color: #2b6cb0;
-  background: #f2f7fc;
-}
-
-.concept-card-title {
-  margin: 0 0 0.25rem;
   font-weight: 600;
+  color: #1a1a1a;
+  cursor: pointer;
+  text-align: left;
 }
 
-.concept-card-summary {
-  margin: 0;
+.concept-line:hover {
+  color: #2b6cb0;
+}
+
+.concept-line-description {
+  margin: 0.2rem 0 0.4rem;
+  padding-left: 0.1rem;
   font-size: 0.9rem;
   color: #555;
   line-height: 1.6;
 }
 
-.question-button {
-  font-weight: 500;
+.entity-item {
+  padding: 0.75rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.entity-name {
+  margin: 0 0 0.2rem;
+  font-weight: 600;
+}
+
+.entity-description {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #555;
+  line-height: 1.6;
 }
 
 .connection-list {
@@ -177,50 +270,48 @@
   color: #555;
 }
 
-.deep-dive {
+/* Deep Dive開始後: ChatGPTに近い、余白の多いシンプルな会話UI。
+   記事解析のカード群はここには一切出さない。 */
+.chat-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
   padding-top: 0.5rem;
   border-top: 1px solid #eee;
+}
+
+.chat-summary {
+  padding: 0.9rem 1rem;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  font-size: 0.9rem;
 }
 
 .chat-log {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: 1.5rem;
 }
 
 .chat-bubble {
-  padding: 0.75rem 1rem;
-  border-radius: 10px;
-  max-width: 100%;
+  max-width: 85%;
 }
 
 .chat-user {
-  background: #eef4fb;
   align-self: flex-end;
+  padding: 0.75rem 1rem;
+  border-radius: 14px;
+  background: #eef4fb;
 }
 
-.chat-assistant {
-  background: #fafafa;
-  border: 1px solid #eee;
-}
-
-.chat-role {
-  margin: 0 0 0.25rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #888;
+.chat-message {
+  max-width: 100%;
 }
 
 .chat-content {
   margin: 0;
-  line-height: 1.7;
+  line-height: 1.8;
   white-space: pre-wrap;
 }
 
-.followup-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  margin-top: 0.75rem;
-}
