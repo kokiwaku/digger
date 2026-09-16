@@ -1,6 +1,6 @@
 import { useState } from "react";
 import "./App.css";
-import type { ArticleAnalysis, ConversationTurn, DeepDiveResponse, DigResult } from "./types";
+import type { ArticleAnalysis, Concept, ConversationTurn, DeepDiveResponse, DigResult } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 
@@ -63,6 +63,67 @@ async function askDeepDive(
   return body as DeepDiveResponse;
 }
 
+// 自由入力欄。Enterで送信、Shift+Enterで改行。pre-chat/chat両方の入力欄で共有する
+// （プレースホルダーとボタン文言だけが呼び出し元ごとに異なる）。
+function DeepDiveInputForm({
+  value,
+  onChange,
+  onSubmit,
+  loading,
+  placeholder,
+  submitLabel,
+  loadingLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  loading: boolean;
+  placeholder: string;
+  submitLabel: string;
+  loadingLabel: string;
+}) {
+  return (
+    <form
+      className="ask-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+    >
+      <textarea
+        className="ask-textarea"
+        rows={3}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
+        disabled={loading}
+      />
+      <button className="dig-button ask-submit" type="submit" disabled={loading || !value.trim()}>
+        {loading ? loadingLabel : submitLabel}
+      </button>
+    </form>
+  );
+}
+
+// 前提知識1件分。名前だけの軽い行として表示し、クリックした場合だけ説明を展開する。
+function ConceptDisclosure({ concept }: { concept: Concept }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <li>
+      <button type="button" className="concept-line" onClick={() => setExpanded((v) => !v)}>
+        {concept.name}
+      </button>
+      {expanded && <p className="concept-line-description">{concept.description}</p>}
+    </li>
+  );
+}
+
 export default function App() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<DigState>({ status: "idle" });
@@ -73,7 +134,9 @@ export default function App() {
   const [revealedFollowUps, setRevealedFollowUps] = useState<Set<number>>(new Set());
 
   const [showHints, setShowHints] = useState(false);
+  const [showConcepts, setShowConcepts] = useState(false);
   const [showBackground, setShowBackground] = useState(false);
+  const [showSummaryInChat, setShowSummaryInChat] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,7 +145,9 @@ export default function App() {
     setDeepDiveState({ status: "idle" });
     setRevealedFollowUps(new Set());
     setShowHints(false);
+    setShowConcepts(false);
     setShowBackground(false);
+    setShowSummaryInChat(false);
     try {
       const result = await digUrl(url);
       setState({ status: "success", result });
@@ -125,7 +190,6 @@ export default function App() {
   const analysis = state.status === "success" ? state.result.analysis : null;
   const hasStartedChat = messages.length > 0;
   const shortSummary = analysis ? firstSentences(analysis.summary, 3) : "";
-  const premiseNames = analysis?.concepts.slice(0, 4).map((c) => c.name) ?? [];
 
   return (
     <div className="page">
@@ -154,45 +218,27 @@ export default function App() {
         <article className="result">
           <header>
             <h2 className="result-title">{state.result.source.title}</h2>
-            <span className="result-source-url">{state.result.source.url}</span>
+            <a className="result-source-url" href={state.result.source.url} target="_blank" rel="noreferrer">
+              {state.result.source.url}
+            </a>
           </header>
 
           {!hasStartedChat && (
             <>
-              <section className="primary-card">
-                <h3 className="section-label">この記事について</h3>
-                <p className="section-body">{shortSummary}</p>
-              </section>
-
-              {premiseNames.length > 0 && (
-                <p className="premise-line">
-                  <span className="premise-label">この記事の前提: </span>
-                  {premiseNames.join(" ・ ")}
-                </p>
-              )}
+              <p className="intro-summary">{shortSummary}</p>
 
               <section className="ask-hero">
-                <h3 className="ask-heading">気になることを聞いてみる</h3>
-                <p className="ask-subtext">この記事について、何が気になりますか？</p>
+                <p className="ask-heading">この記事について、何が気になりますか？</p>
 
-                <form
-                  className="dig-form"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleDeepDive(question);
-                  }}
-                >
-                  <input
-                    className="dig-input"
-                    type="text"
-                    placeholder="例: そもそも、なぜこうなるの？"
-                    value={question}
-                    onChange={(e) => setQuestion(e.target.value)}
-                  />
-                  <button className="dig-button" type="submit" disabled={deepDiveState.status === "loading"}>
-                    {deepDiveState.status === "loading" ? "掘り下げています..." : "掘り下げる"}
-                  </button>
-                </form>
+                <DeepDiveInputForm
+                  value={question}
+                  onChange={setQuestion}
+                  onSubmit={() => handleDeepDive(question)}
+                  loading={deepDiveState.status === "loading"}
+                  placeholder="分からないことを、そのまま書いてください"
+                  submitLabel="掘る"
+                  loadingLabel="掘っています..."
+                />
 
                 {deepDiveState.status === "error" && <p className="error-message">エラー: {deepDiveState.message}</p>}
 
@@ -204,7 +250,7 @@ export default function App() {
                       </button>
                     ) : (
                       <ul className="card-list">
-                        {analysis.deepDiveQuestions.map((deepDiveQuestion) => (
+                        {analysis.deepDiveQuestions.slice(0, 3).map((deepDiveQuestion) => (
                           <li key={deepDiveQuestion}>
                             <button
                               type="button"
@@ -222,9 +268,26 @@ export default function App() {
                 )}
               </section>
 
-              <button type="button" className="link-button" onClick={() => setShowBackground((v) => !v)}>
-                {showBackground ? "背景を閉じる" : "記事の背景を見る"}
-              </button>
+              <div className="secondary-links">
+                {analysis.concepts.length > 0 && (
+                  <button type="button" className="link-button" onClick={() => setShowConcepts((v) => !v)}>
+                    {showConcepts ? "前提知識を閉じる" : "前提知識を見る"}
+                  </button>
+                )}
+                <button type="button" className="link-button" onClick={() => setShowBackground((v) => !v)}>
+                  {showBackground ? "背景を閉じる" : "この記事の背景"}
+                </button>
+              </div>
+
+              {showConcepts && (
+                <div className="details-panel">
+                  <ul className="card-list">
+                    {analysis.concepts.map((concept) => (
+                      <ConceptDisclosure key={concept.id} concept={concept} />
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {showBackground && (
                 <div className="details-panel">
@@ -232,20 +295,6 @@ export default function App() {
                     <h3 className="section-label">なぜ重要？</h3>
                     <p className="section-body">{analysis.whyItMatters}</p>
                   </section>
-
-                  {analysis.concepts.length > 0 && (
-                    <section>
-                      <h3 className="section-label">前提知識</h3>
-                      <ul className="card-list">
-                        {analysis.concepts.map((concept) => (
-                          <li key={concept.id} className="concept-item">
-                            <p className="concept-item-title">{concept.name}</p>
-                            <p className="concept-item-description">{concept.description}</p>
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  )}
 
                   {analysis.connections.length > 0 && (
                     <section>
@@ -281,6 +330,12 @@ export default function App() {
 
           {hasStartedChat && (
             <section className="chat-section">
+              <button type="button" className="link-button" onClick={() => setShowSummaryInChat((v) => !v)}>
+                {showSummaryInChat ? "記事の要点を閉じる" : "記事の要点を見る"}
+              </button>
+
+              {showSummaryInChat && <p className="intro-summary chat-summary">{shortSummary}</p>}
+
               <div className="chat-log">
                 {messages.map((message, index) => (
                   <div
@@ -317,24 +372,15 @@ export default function App() {
 
               {deepDiveState.status === "error" && <p className="error-message">エラー: {deepDiveState.message}</p>}
 
-              <form
-                className="dig-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleDeepDive(question);
-                }}
-              >
-                <input
-                  className="dig-input"
-                  type="text"
-                  placeholder="さらに気になることを入力..."
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                />
-                <button className="dig-button" type="submit" disabled={deepDiveState.status === "loading"}>
-                  {deepDiveState.status === "loading" ? "掘り下げています..." : "送る"}
-                </button>
-              </form>
+              <DeepDiveInputForm
+                value={question}
+                onChange={setQuestion}
+                onSubmit={() => handleDeepDive(question)}
+                loading={deepDiveState.status === "loading"}
+                placeholder="さらに聞きたいことを入力..."
+                submitLabel="送る"
+                loadingLabel="送信中..."
+              />
             </section>
           )}
         </article>

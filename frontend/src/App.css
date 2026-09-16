@@ -91,6 +91,11 @@
   font-size: 0.8rem;
   color: #888;
   word-break: break-all;
+  text-decoration: none;
+}
+
+.result-source-url:hover {
+  text-decoration: underline;
 }
 
 .section-label {
@@ -107,47 +112,61 @@
   line-height: 1.7;
 }
 
-.primary-card {
-  padding: 1.1rem 1.25rem;
-  border-radius: 12px;
-  background: #fafafa;
-  border: 1px solid #eee;
-}
-
-.premise-line {
+.intro-summary {
   margin: 0;
-  font-size: 0.85rem;
-  color: #777;
-  line-height: 1.6;
+  line-height: 1.8;
+  color: #333;
 }
 
-.premise-label {
-  font-weight: 600;
-  color: #555;
-}
-
-/* 気になることを聞いてみる（Primary Viewの主役） */
+/* この記事について、何が気になりますか？（Primary Viewの主役） */
 .ask-hero {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.75rem;
   padding: 1.5rem 0;
 }
 
 .ask-heading {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 1.05rem;
   font-weight: 700;
 }
 
-.ask-subtext {
-  margin: 0 0 0.5rem;
-  color: #666;
-  font-size: 0.95rem;
+.ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ask-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.9rem 1rem;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.6;
+  border: 1px solid #ccc;
+  border-radius: 10px;
+  resize: vertical;
+}
+
+.ask-textarea:focus {
+  outline: 2px solid #2b6cb0;
+  outline-offset: 1px;
+}
+
+.ask-submit {
+  align-self: flex-end;
 }
 
 .hint-area {
   margin-top: 0.25rem;
+}
+
+.secondary-links {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
 }
 
 .link-button {
@@ -202,7 +221,30 @@
   background: #f2f7fc;
 }
 
-.concept-item,
+/* 前提知識: カードではなく、名前だけの軽い行。クリックすると説明を展開する。 */
+.concept-line {
+  background: none;
+  border: none;
+  padding: 0.3rem 0;
+  font: inherit;
+  font-weight: 600;
+  color: #1a1a1a;
+  cursor: pointer;
+  text-align: left;
+}
+
+.concept-line:hover {
+  color: #2b6cb0;
+}
+
+.concept-line-description {
+  margin: 0.2rem 0 0.4rem;
+  padding-left: 0.1rem;
+  font-size: 0.9rem;
+  color: #555;
+  line-height: 1.6;
+}
+
 .entity-item {
   padding: 0.75rem 1rem;
   border: 1px solid #ddd;
@@ -210,13 +252,11 @@
   background: #fafafa;
 }
 
-.concept-item-title,
 .entity-name {
   margin: 0 0 0.2rem;
   font-weight: 600;
 }
 
-.concept-item-description,
 .entity-description {
   margin: 0;
   font-size: 0.9rem;
@@ -259,6 +299,14 @@
   gap: 1.25rem;
   padding-top: 0.5rem;
   border-top: 1px solid #eee;
+}
+
+.chat-summary {
+  padding: 0.9rem 1rem;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  font-size: 0.9rem;
 }
 
 .chat-log {

@@ -27,8 +27,10 @@ flowchart TD
     C -->|"入力状態(url)<br/>結果状態(DigState)"| C
     C -->|"POST /api/dig<br/>{ url }"| F["Backend API<br/>VITE_API_BASE_URL"]
     F -->|"200: DigResult / 4xx,5xx: error"| C
-    C --> G["Pre-chat Primary View<br/>タイトル/短い要約/前提の一言/<br/>「気になることを聞いてみる」入力欄"]
-    G -.->|"ヒントを見る / 背景を見る"| G2["補助UI（初期は非表示）<br/>deepDiveQuestions / whyItMatters全文 /<br/>concepts全件 / connections / entities"]
+    C --> G["Pre-chat Primary View<br/>タイトル/短い要約（地の文）/<br/>「この記事について、何が気になりますか？」+ textarea"]
+    G -.->|"ヒントを見る"| G2a["deepDiveQuestions（最大3件）"]
+    G -.->|"前提知識を見る"| G2b["concepts名の一覧（クリックで個別に説明を展開）"]
+    G -.->|"この記事の背景"| G2c["whyItMatters全文 / connections / entities"]
     C -->|"最初の質問を送信 → hasStartedChat=true"| C
     C -->|"POST /api/deep-dive<br/>{ articleAnalysis, question, conversationHistory }"| F
     F -->|"200: DeepDiveResponse / 4xx,5xx: error"| C
@@ -40,11 +42,12 @@ flowchart TD
   - `API_BASE_URL` は `import.meta.env.VITE_API_BASE_URL`（未設定時は `http://localhost:8787` にフォールバック）。
   - フォームでURLを入力し「掘る」を押すと `digUrl()` が `POST /api/dig` を呼び出します。バックエンドが実際にURLへアクセスして抽出した`title`と、Article Analysis（backendの`LLM_PROVIDER`に応じてモックまたはVertex AI Geminiによる実解析）の結果が表示されます。ローディング中は「記事を読み解いています…」と表示します。
   - 状態は `DigState`（`idle` / `loading` / `error` / `success`）という判別可能なユニオン型1つで管理し、状態管理ライブラリは使わず `useState` のみです。
-  - **情報カード中心からチャット中心へ**: Diggerの差別化は「大量のカードや機能を見せること」ではなく「今読んでいる記事を理解している」「会話から理解を深める」という裏側の体験にある、という方針のもと、表側のUIは`hasStartedChat`（`messages.length > 0`から導出。stateとしては持たない）を境に2つの画面に分かれます。**ArticleAnalysisのデータ自体・`DeepDiveInput`/`DeepDiveResponse`の型は変更していません**（表側は簡素化、裏側に渡すコンテキストは従来通り豊富なまま）。
-    - **Pre-chat Primary View**（`!hasStartedChat`）: 主役は「気になることを聞いてみる」という見出し＋自由入力欄＋「掘り下げる」ボタンです。記事情報としては、`summary`の冒頭3文だけの短い要約（`firstSentences()`というローカル関数で文末（。！？）区切りに冒頭N文だけ切り出す）と、`concepts`の名前だけを「この記事の前提: 政策金利 ・ 金利差 ・ ...」という1行に並べた軽い表示のみを常時表示します。`whyItMatters`・`concepts`の説明文・`connections`・`entities`・`deepDiveQuestions`はここでは一切出しません。
-    - **補助UI**（初期は非表示、Pre-chat Primary Viewのみに存在）: 「質問が浮かばないときはヒントを見る」を押すと`deepDiveQuestions`が候補ボタンとして展開されます（クリックでその質問がそのまま深掘り開始）。「記事の背景を見る」を押すと、`whyItMatters`全文・`concepts`全件（名前＋説明）・`connections`・`entities`をまとめた詳細パネルが開きます。ユーザー自身の疑問を先回りしないよう、どちらも既定では閉じています。
-    - **Chat View**（`hasStartedChat`）: 最初の質問を送った瞬間、記事情報のカード・ヒント・背景パネルは全て非表示になり、画面はチャットのみになります（タイトル行だけは記事の目印として残す）。ユーザーの発言は右寄せの吹き出し、Diggerの回答はカードや枠を持たない地の文（ChatGPTに近い見た目）で表示します。回答についてくる`suggestedFollowUps`はメッセージごとに既定で隠しており、「次の問いを見る」を押した場合のみ候補ボタンとして表示します（`revealedFollowUps: Set<number>`でメッセージ単位に開閉を管理）。AIが会話の方向を常時提示し続けないようにするためです。
-    - 「次に掘るなら」の質問ボタン、ヒントの`deepDiveQuestions`ボタン、回答内の`suggestedFollowUps`ボタン、自由入力欄のいずれから質問しても、同じ`handleDeepDive(questionText)`関数が呼ばれ、同じ`askDeepDive()`（`POST /api/deep-dive`）を叩きます。送信のたびに、それまでの`messages`を`{ role, content }[]`に変換して`conversationHistory`として一緒に送ります（backendへ渡す文脈の豊富さは変えていません）。ページ遷移はせず、`messages`にユーザーの質問とDiggerの回答を追記していくだけです。深掘り用のローディング/エラー状態は`DeepDiveState`という別のstateで、記事解析の`DigState`とは独立しています。
+  - **情報カード中心から会話中心へ**: Diggerの差別化は「大量のカードや機能を見せること」ではなく「今読んでいる記事を理解している」「会話から理解を深める」という裏側の体験にある、という方針のもと、表側のUIは`hasStartedChat`（`messages.length > 0`から導出。stateとしては持たない）を境に2つの画面に分かれます。**ArticleAnalysisのデータ自体・`DeepDiveInput`/`DeepDiveResponse`の型は変更していません**（表側は簡素化、裏側に渡すコンテキストは従来通り豊富なまま）。
+    - **Pre-chat Primary View**（`!hasStartedChat`）: 記事情報は`summary`の冒頭3文（`firstSentences()`というローカル関数で文末（。！？）区切りに冒頭N文だけ切り出す）を、カードや枠を持たない地の文として表示するだけです。主役は「この記事について、何が気になりますか？」という一言の下にある大きめの`<textarea>`（`DeepDiveInputForm`コンポーネント、Enterで送信・Shift+Enterで改行）です。`whyItMatters`・`concepts`（名前を含め一切）・`connections`・`entities`・`deepDiveQuestions`はここでは一切出しません。
+    - **補助UI**（初期は非表示、Pre-chat Primary Viewのみに存在。3つとも独立した開閉state）: ①「質問が浮かばないときはヒントを見る」→`deepDiveQuestions`を最大3件、候補ボタンとして展開（クリックでその質問がそのまま深掘り開始）。②「前提知識を見る」→`concepts`の名前だけをプレーンテキストのリンク風の行として並べ（カード化しない）、`ConceptDisclosure`コンポーネントによりクリックした概念だけ説明文を展開する2段階の開示。③「この記事の背景」→`whyItMatters`全文・`connections`・`entities`をまとめたパネル。ユーザー自身の疑問を先回りしないよう、3つとも既定では閉じています。
+    - **Chat View**（`hasStartedChat`）: 最初の質問を送った瞬間、記事情報・ヒント・前提知識・背景パネルは全て非表示になり、画面はほぼ会話のみになります（タイトル行と、任意で開ける「記事の要点を見る」だけが記事の目印として残る）。ユーザーの発言は右寄せの吹き出し、Diggerの回答はカードや枠を持たない地の文（ChatGPTに近い見た目）で表示します。回答についてくる`suggestedFollowUps`はメッセージごとに既定で隠しており、「次の問いを見る」を押した場合のみ候補ボタンとして表示します（`revealedFollowUps: Set<number>`でメッセージ単位に開閉を管理）。AIが会話の方向を常時提示し続けないようにするためです。
+    - **自由入力欄（`DeepDiveInputForm`）**: pre-chat/chat両方で共有する小さなコンポーネントで、`<textarea rows={3}>`（横幅いっぱい、`resize: vertical`）＋送信ボタンで構成されます。Enterキー押下（Shift未併用）で送信、Shift+Enterで改行、送信中は入力欄・ボタンとも無効化、空文字は送信不可です。プレースホルダーは特定の質問例に寄せすぎないよう「分からないことを、そのまま書いてください」（pre-chat）「さらに聞きたいことを入力...」（chat）としています。
+    - ヒントの`deepDiveQuestions`ボタン、回答内の`suggestedFollowUps`ボタン、自由入力欄のいずれから質問しても、同じ`handleDeepDive(questionText)`関数が呼ばれ、同じ`askDeepDive()`（`POST /api/deep-dive`）を叩きます。送信のたびに、それまでの`messages`を`{ role, content }[]`に変換して`conversationHistory`として一緒に送ります（backendへ渡す文脈の豊富さは変えていません）。ページ遷移はせず、`messages`にユーザーの質問とDiggerの回答を追記していくだけです。深掘り用のローディング/エラー状態は`DeepDiveState`という別のstateで、記事解析の`DigState`とは独立しています。
   - エラー時はバックエンドが返した `error` メッセージ、またはネットワークエラーの内容を表示します（`400`/`403`/`422`/`502`いずれも同じ見た目で表示、種別による出し分けは未実装）。
 - **`types.ts`**: `/api/dig`・`/api/deep-dive` のレスポンス型（`DigResult` / `DigSource` / `ArticleAnalysis` / `Concept` / `Entity` / `Connection` / `ConversationTurn` / `DeepDiveResponse`）を定義。backend側の `src/types.ts`・`src/llm/*.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。チャットUI用の`ChatMessage`型（`ConversationTurn`に`suggestedFollowUps`を加えたもの）は`App.tsx`内にのみ存在するローカル型で、`types.ts`には含めていません。
 - **`App.css`**: 余白の広いシンプルなレイアウト。`flex-wrap` と相対単位でスマホ幅でも崩れないようにしています。CSSフレームワーク等は未導入です。
@@ -86,7 +89,7 @@ npm run dev
 
 ## 今後の拡張ポイント（未実装）
 
-- Chat Viewでも「記事の背景を見る」相当の情報に戻れる導線（現状は最初の質問を送ると記事情報には一切戻れない）
+- Chat Viewから「前提知識を見る」「この記事の背景」相当の情報に戻れる導線（現状は「記事の要点を見る」で短い要約だけ再表示可能。前提知識・背景はChat View突入後は見られない）
 - 会話から理解したことを蓄積するUI（backendのKnowledge Extractionが実LLM化・接続された後に追加）
 - エラー種別（`400`/`403`/`422`/`502`）に応じたUIの出し分け（現状は全て同じ見た目）
 - 深掘りの会話をリロード後も残すための永続化（現状はページをリロードすると消える）
