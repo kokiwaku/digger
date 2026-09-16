@@ -211,7 +211,10 @@ export default function App() {
 
   return (
     <div className="page">
-      <h1 className="brand">Digger</h1>
+      <h1 className="brand">
+        <img className="brand-icon" src="/assets/frames/mole-icon.png" alt="" aria-hidden="true" />
+        Digger
+      </h1>
       <p className="tagline">興味を持ったことを深掘りし、理解を蓄積していくためのツール</p>
 
       <form className="dig-form" onSubmit={handleSubmit}>
