@@ -1,0 +1,161 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createVertexDeepDiveService } from "./deepDive.vertex.js";
+import { LlmProviderError } from "./provider/llmProviderError.js";
+import type { LlmProvider, GenerateTextInput } from "./provider/llmProvider.js";
+import type { ArticleAnalysis } from "./articleAnalysis.js";
+import type { ConversationTurn } from "./conversation.js";
+
+const ARTICLE_ANALYSIS: ArticleAnalysis = {
+  summary: "テスト用の要約です。",
+  whyItMatters: "テスト用の重要性の説明です。",
+  concepts: [
+    { id: "concept-1", name: "テスト概念", description: "説明", importance: "required" },
+  ],
+  entities: [{ name: "テスト組織", type: "organization", description: "説明" }],
+  connections: [{ topic: "関連トピック", relation: "関連の説明" }],
+  deepDiveQuestions: ["なぜ？", "どういう仕組み？", "誰にどう影響する？"],
+};
+
+const VALID_RESPONSE = {
+  answer: "テスト用の回答です。",
+  relatedConcepts: [{ name: "テスト概念", relation: "今回の質問の前提となる概念だから" }],
+  suggestedFollowUps: ["次に掘るならこの問い？", "もう一つの問い？"],
+};
+
+function baseInput(overrides: Partial<{ question: string; conversationHistory: ConversationTurn[] }> = {}) {
+  return {
+    articleAnalysis: ARTICLE_ANALYSIS,
+    question: "なぜこれが起きたの？",
+    conversationHistory: [],
+    ...overrides,
+  };
+}
+
+function fakeProvider(generateText: LlmProvider["generateText"]): LlmProvider {
+  return { generateText };
+}
+
+test("ask() returns validated data when the LLM returns valid JSON on the first try", async () => {
+  let callCount = 0;
+  const provider = fakeProvider(async () => {
+    callCount++;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  const result = await service.ask(baseInput());
+
+  assert.deepEqual(result, VALID_RESPONSE);
+  assert.equal(callCount, 1);
+});
+
+test("ask() retries once when the first response fails JSON parsing, then succeeds", async () => {
+  let callCount = 0;
+  const provider = fakeProvider(async () => {
+    callCount++;
+    if (callCount === 1) return "this is not JSON";
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  const result = await service.ask(baseInput());
+
+  assert.deepEqual(result, VALID_RESPONSE);
+  assert.equal(callCount, 2);
+});
+
+test("ask() retries once when the first response fails schema validation, then succeeds", async () => {
+  let callCount = 0;
+  const provider = fakeProvider(async () => {
+    callCount++;
+    // relatedConceptsが古い(string[])形式で返ってきたケースを想定
+    if (callCount === 1) return JSON.stringify({ ...VALID_RESPONSE, relatedConcepts: ["テスト概念"] });
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  const result = await service.ask(baseInput());
+
+  assert.deepEqual(result, VALID_RESPONSE);
+  assert.equal(callCount, 2);
+});
+
+test("ask() throws after the retry also fails schema validation", async () => {
+  let callCount = 0;
+  const provider = fakeProvider(async () => {
+    callCount++;
+    return "still not JSON";
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+
+  await assert.rejects(
+    () => service.ask(baseInput()),
+    (err: unknown) => err instanceof LlmProviderError,
+  );
+  assert.equal(callCount, 2);
+});
+
+test("ask() propagates an LLM provider error immediately without retrying", async () => {
+  let callCount = 0;
+  const provider = fakeProvider(async () => {
+    callCount++;
+    throw new LlmProviderError("timed out", "timeout");
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+
+  await assert.rejects(
+    () => service.ask(baseInput()),
+    (err: unknown) => err instanceof LlmProviderError && err.code === "timeout",
+  );
+  assert.equal(callCount, 1);
+});
+
+test("ask() includes the question and conversation history in the prompt sent to the provider", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  const history: ConversationTurn[] = [
+    { role: "user", content: "以前の質問です" },
+    { role: "assistant", content: "以前の回答です" },
+  ];
+  await service.ask(baseInput({ question: "今回の質問です", conversationHistory: history }));
+
+  assert.ok(capturedInput);
+  assert.match(capturedInput.prompt, /今回の質問です/);
+  assert.match(capturedInput.prompt, /以前の質問です/);
+  assert.match(capturedInput.prompt, /以前の回答です/);
+});
+
+test("ask() truncates conversation history beyond the safe limit, dropping the oldest messages", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  const longHistory: ConversationTurn[] = Array.from({ length: 25 }, (_, i) => ({
+    role: i % 2 === 0 ? "user" : "assistant",
+    content: `メッセージ${i}`,
+  }));
+  await service.ask(baseInput({ conversationHistory: longHistory }));
+
+  assert.ok(capturedInput);
+  assert.doesNotMatch(capturedInput.prompt, /メッセージ0(?!\d)/);
+  assert.match(capturedInput.prompt, /メッセージ24/);
+});
+
+test("ask() works when userKnowledge is not provided", async () => {
+  const provider = fakeProvider(async () => JSON.stringify(VALID_RESPONSE));
+  const service = createVertexDeepDiveService(() => provider);
+
+  const result = await service.ask(baseInput());
+  assert.deepEqual(result, VALID_RESPONSE);
+});

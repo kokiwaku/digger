@@ -103,8 +103,8 @@ Content-Type: application/json
 
 - 「次に掘るなら」の質問ボタンをクリックした場合も、自由入力欄に質問を入力した場合も、同じ`/api/deep-dive`が呼ばれます。
 - 2回目以降の質問では、これまでの会話（`{ role: "user" | "assistant", content: string }[]`）を`conversationHistory`として送ります。
-- 成功時のレスポンスは `{ answer, relatedConcepts, suggestedFollowUps }`。回答本文に加え、関連する前提知識と次の質問候補が返り、`suggestedFollowUps`も新たにクリック可能なボタンとして表示されます。
-- **現時点ではLLM未接続のため、`answer`は固定のモック文言です**（`backend/src/llm/deepDive.mock.ts`）。`relatedConcepts`と`suggestedFollowUps`は記事の解析結果（`concepts`/`deepDiveQuestions`）から実際に組み立てています。
+- 成功時のレスポンスは `{ answer, relatedConcepts, suggestedFollowUps }`。`relatedConcepts`は`{ name, relation }[]`（概念名と、今回の質問との関係の説明）で、回答本文・次の質問候補とあわせて返ります。`suggestedFollowUps`は新たにクリック可能なボタンとして表示されます。
+- `LLM_PROVIDER`で切り替え可能: `mock`（デフォルト）なら記事の解析結果（`concepts`/`deepDiveQuestions`）から組み立てた固定応答、`vertex`ならVertex AI Geminiが記事のArticle Analysis・会話履歴・（あれば）ユーザーの理解履歴を踏まえて実際に回答します。Diggerは一般的な雑談チャットではなく、今読んでいる記事・テーマを理解するための専用家庭教師として振る舞うよう指示しています。
 - 会話履歴はMongoDBにはまだ保存されません（ページをリロードすると消えます）。認証も不要です。
 
 ### 記事取得ポリシー
@@ -207,9 +207,8 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出、およびArticle AnalysisのVertex AI（Gemini）実LLM化は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、およびArticle Analysis・Deep DiveのVertex AI（Gemini）実LLM化は実装済みですが、以下は未実装・未設計です。
 
-- Deep Dive（`backend/src/llm/`）を、Article Analysisと同じパターンでVertex AI Geminiに実際に接続する
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線と、ユーザーの理解履歴のデータモデル
 - Knowledge Extraction（深掘り対話から学習候補を抽出するLLM処理）を実際の深掘り対話（`/api/deep-dive`）に接続する
 - 解析結果・深掘りの会話履歴・ユーザーの理解履歴のMongoDBへの永続化

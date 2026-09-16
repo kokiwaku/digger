@@ -11,17 +11,19 @@ backend/
 │   ├── db.ts                        # MongoDB接続クライアントの生成・pingヘルパー
 │   ├── dig.ts                         # /api/dig のURLバリデーションと解析結果の組み立て
 │   ├── deepDive.ts                     # /api/deep-dive のリクエスト検証と回答の組み立て
-│   ├── llmTest.ts                       # /api/llm/test（開発用のLLM疎通確認API）のロジック
-│   ├── articleFetcher.ts                 # 記事HTMLの取得（リダイレクト追跡）とReadabilityによる本文/タイトル抽出
-│   ├── network.ts                         # SSRF対策（private/loopback/link-localホストの拒否）
-│   ├── robots.ts                           # robots.txtの取得・パース・許可判定
-│   ├── errors.ts                             # ArticleFetchError（記事取得系エラーの共通型）
-│   ├── types.ts                               # /api/dig のリクエスト/レスポンス型
-│   ├── network.test.ts                         # network.ts のユニットテスト
-│   ├── robots.test.ts                           # robots.ts のユニットテスト
-│   ├── llmTest.test.ts                           # llmTest.ts のユニットテスト
-│   └── llm/                                        # LLMを使う4処理の型・schema・interface・モック/実LLM実装
-│       ├── conversation.ts                           # 会話ターンの共通型（Knowledge Extraction / Deep Diveで共用）
+│   ├── deepDive.test.ts                 # deepDive.ts のユニットテスト（mock providerで/api/deep-dive相当を検証）
+│   ├── llmTest.ts                        # /api/llm/test（開発用のLLM疎通確認API）のロジック
+│   ├── articleFetcher.ts                  # 記事HTMLの取得（リダイレクト追跡）とReadabilityによる本文/タイトル抽出
+│   ├── network.ts                          # SSRF対策（private/loopback/link-localホストの拒否）
+│   ├── robots.ts                            # robots.txtの取得・パース・許可判定
+│   ├── errors.ts                              # ArticleFetchError（記事取得系エラーの共通型）
+│   ├── types.ts                                # /api/dig のリクエスト/レスポンス型
+│   ├── network.test.ts                          # network.ts のユニットテスト
+│   ├── robots.test.ts                            # robots.ts のユニットテスト
+│   ├── llmTest.test.ts                            # llmTest.ts のユニットテスト
+│   └── llm/                                         # LLMを使う4処理の型・schema・interface・モック/実LLM実装
+│       ├── conversation.ts                            # 会話ターンの共通型（Knowledge Extraction / Deep Diveで共用）
+│       ├── jsonExtraction.ts                            # LLM応答からJSON本体を取り出す共通ヘルパー（markdownフェンス対応）
 │       ├── articleAnalysis.ts                        # 型・zod schema・ArticleAnalysisService interface
 │       ├── articleAnalysis.mock.ts                    # モック実装（固定のデモ用サンプルを返す）
 │       ├── articleAnalysis.mock.test.ts                # モック実装のユニットテスト
@@ -37,6 +39,10 @@ backend/
 │       ├── deepDive.ts                                           # 型・zod schema・DeepDiveService interface
 │       ├── deepDive.mock.ts                                       # モック実装（記事の解析結果から応答を組み立てる）
 │       ├── deepDive.mock.test.ts                                   # モック実装のユニットテスト
+│       ├── deepDive.vertex.ts                                        # 実LLM実装（記事コンテキスト+会話履歴からprompt生成、schema検証+1回だけ再試行）
+│       ├── deepDive.vertex.test.ts                                    # 上記のユニットテスト（フェイクのLlmProviderを使用、ネットワーク未使用）
+│       ├── deepDiveFactory.ts                                          # LLM_PROVIDER環境変数によるDeepDiveService切り替え
+│       ├── deepDiveFactory.test.ts                                      # 上記のユニットテスト
 │       └── provider/                                                 # LLMプロバイダー抽象化層（Vertex AI/Geminiなど）
 │           ├── llmProvider.ts                                          # LlmProvider interface（generateTextのみ）
 │           ├── llmProviderError.ts                                      # LlmProviderError と安全なAPIレスポンスへの変換
@@ -87,8 +93,12 @@ flowchart TD
 
     B --> M["POST /api/deep-dive"]
     M -->|"deepDiveInputSchema.safeParse"| DD["deepDive.ts<br/>buildDeepDiveResponse"]
-    DD -->|"ask({ articleAnalysis, question, conversationHistory })"| DDS["llm/deepDive.mock.ts<br/>DeepDiveService（モック）"]
-    DDS -->|DeepDiveResponse| DD
+    DD -->|"getDeepDiveService()"| DDF["deepDiveFactory.ts"]
+    DDF -->|"LLM_PROVIDER=mock"| DDM["deepDive.mock.ts"]
+    DDF -->|"LLM_PROVIDER=vertex"| DDV["deepDive.vertex.ts<br/>記事コンテキスト+会話履歴→prompt生成<br/>→LlmProvider→JSON parse→schema検証<br/>（失敗時1回だけ再試行）"]
+    DDV -->|"getLlmProvider()"| PF2
+    DDM -->|DeepDiveResponse| DD
+    DDV -->|DeepDiveResponse| DD
     DD --> M
 
     B --> T["POST /api/llm/test"]
@@ -117,7 +127,7 @@ flowchart TD
 - **`robots.ts`**: `ensureAllowedByRobots(url, userAgent)` がrobots.txtを取得・パースし、Diggerの User-Agent（`digger`）または`*`グループのルールと照合。`Disallow`に一致すれば`ArticleFetchError`（`403`）。robots.txt自体が取得できない（ネットワークエラー・非2xxなど）場合は許可されているものとして扱う。簡易パーサのため`Allow`/`Disallow`のみサポートし、`Crawl-delay`等は無視する。
 - **`errors.ts`**: `ArticleFetchError`（`400`/`403`/`422`/`502`のいずれかのステータスを持つ）。記事取得パイプライン全体（URL検証・SSRF対策・robots確認・HTTP取得・本文抽出）で共通に使うエラー型。
 - **`dig.ts`**: `parseArticleUrl()` がリクエストの `url` を検証（未指定・不正な形式・http/https以外のプロトコルはエラー）。`buildDigResult()` が `fetchArticle()` で取得した実際の `title`/`textContent` を `llm/articleAnalysisFactory.ts` の `getArticleAnalysisService()`（`LLM_PROVIDER`に応じてmock/vertexを切り替え）に渡し、その結果と組み合わせて `DigResult` を返します。`LlmProviderError`は`index.ts`側で捕捉し、`toSafeApiResponse()`で安全なレスポンスに変換します。
-- **`deepDive.ts`**: `parseDeepDiveInput()` がリクエストボディを `llm/deepDive.ts` の `deepDiveInputSchema` でそのまま検証（`articleAnalysis`/`question`/`conversationHistory`/`userKnowledge?`の形が正しいか）。`buildDeepDiveResponse()` が `llm/deepDive.mock.ts` の `DeepDiveService` を呼び出すだけの薄いラッパーです。
+- **`deepDive.ts`**: `parseDeepDiveInput()` がリクエストボディを `llm/deepDive.ts` の `deepDiveInputSchema` でそのまま検証（`articleAnalysis`/`question`/`conversationHistory`/`userKnowledge?`の形が正しいか）。`buildDeepDiveResponse()` が `llm/deepDiveFactory.ts` の `getDeepDiveService()`（`LLM_PROVIDER`に応じてmock/vertexを切り替え）を呼び出すだけの薄いラッパーです。
 - **`types.ts`**: `/api/dig` のリクエスト型（`DigRequest`）とレスポンス型（`DigResult` / `DigSource`、および `llm/articleAnalysis.ts` の `ArticleAnalysis`）を定義。frontend側の `src/types.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。`/api/deep-dive` は `llm/deepDive.ts` の型をそのままリクエスト/レスポンス型として使うため、`types.ts` に重複定義はありません。
 - **`llm/`**: LLMを使う4処理（後述）の型・schema・interface・モック実装、および`llm/provider/`（Vertex AI等のプロバイダー抽象化層。後述）。
 - **`llmTest.ts`**: 開発用の疎通確認API `POST /api/llm/test` のロジック。リクエストの`message`をzodで検証し、`llm/provider/`の`getLlmProvider()`が返す`LlmProvider`（デフォルトはモック）の`generateText()`を、固定のsystem promptと一緒に呼ぶだけです。Diggerの業務ロジック（Article Analysis等）はまだ関与しません。
@@ -125,12 +135,12 @@ flowchart TD
   - `GET /api/health` — プロセスが生きていることの確認（DBには触れない）
   - `GET /api/health/db` — `pingDatabase()` を呼び、成功なら `200 { status: "ok", db: "connected" }`、失敗なら `503 { status: "error", db: "disconnected", message }`
   - `POST /api/dig` — `{ url: string }` を受け取り、URLバリデーション失敗またはSSRF対象ホストは `400`、robots.txtにより不許可なら `403`、記事取得・抽出・Article Analysisに成功すれば `200` で `DigResult`、それ以外の取得・抽出失敗は `422`（本文抽出失敗・非HTML）または `502`（アクセス失敗・非2xx・ホスト名解決失敗）で `{ error: string }`
-  - `POST /api/deep-dive` — `{ articleAnalysis, question, conversationHistory, userKnowledge? }` を受け取り、schemaバリデーション失敗は `400`、成功すれば `200` で `DeepDiveResponse`（`answer`/`relatedConcepts`/`suggestedFollowUps`）、それ以外の失敗は `502` で `{ error: string }`
+  - `POST /api/deep-dive` — `{ articleAnalysis, question, conversationHistory, userKnowledge? }` を受け取り、schemaバリデーション失敗は `400`、成功すれば `200` で `DeepDiveResponse`（`answer`/`relatedConcepts`/`suggestedFollowUps`）、LLMプロバイダー側のエラーは原因に応じて `500`/`502`/`504`、それ以外の失敗は `502` で `{ error: string }`
   - `POST /api/llm/test` — 開発用のLLM疎通確認API（後述）。`{ message: string }` を受け取り、バリデーション失敗は `400`、成功すれば `200` で `{ response: string }`、LLMプロバイダー側のエラーは原因に応じて `500`/`502`/`504` で `{ error: string }`（安全な汎用メッセージのみ。詳細はサーバーログへ）
 
 ## LLM処理（Article Analysis / Personalized Analysis / Knowledge Extraction / Deep Dive）
 
-Diggerのコア機能である「記事を深掘りして理解を蓄積する」部分は、4つの独立したLLM処理として実装します。**Article Analysisは実LLM化済みで、`LLM_PROVIDER=vertex`のときVertex AI Geminiが実際に記事内容を解析します。** Deep Dive・Personalized Analysis・Knowledge Extractionはまだ`llm/*.mock.ts`の固定/簡易ロジックのみです。
+Diggerのコア機能である「記事を深掘りして理解を蓄積する」部分は、4つの独立したLLM処理として実装します。**Article AnalysisとDeep Diveは実LLM化済みで、`LLM_PROVIDER=vertex`のときVertex AI Geminiが実際に記事内容の解析／対話への回答を行います。** Personalized Analysis・Knowledge Extractionはまだ`llm/*.mock.ts`の固定/簡易ロジックのみです。
 
 ```mermaid
 flowchart LR
@@ -152,9 +162,12 @@ flowchart LR
         KES --> KE["KnowledgeCandidate[]<br/>concept / statement / evidence /<br/>confidence / isNew"]
     end
 
-    subgraph "4. Deep Dive（実装済み・/api/deep-diveから呼ばれる）"
-        DDI["DeepDiveInput<br/>articleAnalysis + question +<br/>conversationHistory + userKnowledge?"] --> DDS["DeepDiveService<br/>(deepDive.mock.ts)"]
+    subgraph "4. Deep Dive（実LLM化済み・/api/deep-diveから呼ばれる）"
+        DDI["DeepDiveInput<br/>articleAnalysis + question +<br/>conversationHistory + userKnowledge?"] --> DDF3["deepDiveFactory.ts"]
+        DDF3 -->|mock| DDS["deepDive.mock.ts"]
+        DDF3 -->|vertex| DDV3["deepDive.vertex.ts<br/>(Gemini + structured output +<br/>schema検証 + 1回だけ再試行)"]
         DDS --> DDO["DeepDiveResponse<br/>answer / relatedConcepts / suggestedFollowUps"]
+        DDV3 --> DDO
     end
 
     AA -.->|将来: userKnowledgeと合わせて入力| PAI
@@ -171,9 +184,9 @@ flowchart LR
 - **1. Article Analysis**（`llm/articleAnalysis.ts` / `articleAnalysis.mock.ts` / `articleAnalysis.vertex.ts` / `articleAnalysisFactory.ts`）: 記事の`title`/`url`/`content`から、要約・重要性・前提知識（`concepts`）・関連する人物や組織（`entities`）・他テーマとの関連（`connections`）・深掘りの問い（`deepDiveQuestions`）を生成。`dig.ts`が`articleAnalysisFactory.ts`の`getArticleAnalysisService()`（`LLM_PROVIDER`で`articleAnalysis.mock.ts`/`articleAnalysis.vertex.ts`を切り替え）を呼び、結果は`/api/dig`のレスポンスに含まれます。実LLM実装の詳細は次項を参照。
 - **2. Personalized Analysis**（`llm/personalizedAnalysis.ts` / `personalizedAnalysis.mock.ts`）: Article Analysisの結果とユーザーの過去の理解（`userKnowledge`）を照合し、「何を説明すべきか」を判定。モック実装はLLMを使わず、concept名の文字列一致だけで「既知/未知」を振り分ける簡易ロジックです。**まだどのルートからも呼ばれていません**（ユーザーの理解履歴を保存する仕組み自体が未実装のため）。
 - **3. Knowledge Extraction**（`llm/knowledgeExtraction.ts` / `knowledgeExtraction.mock.ts`）: 深掘り対話のログ（`conversation`）から、新しく理解したと思われる知識の"候補"（`KnowledgeCandidate`）を抽出。AIが理解を勝手に確定させないよう、あくまで候補を返すだけで、保存の可否はユーザーが決める設計です。**まだどのルートからも呼ばれていません**（今回`/api/deep-dive`は実装しましたが、そこでの対話ログをKnowledge Extractionに渡す導線はまだ未実装です）。
-- **4. Deep Dive**（`llm/deepDive.ts` / `deepDive.mock.ts`）: Article Analysisの結果・質問（`question`）・これまでの会話（`conversationHistory`）から、その場の回答（`answer`）・関連する前提知識（`relatedConcepts`）・次の質問候補（`suggestedFollowUps`）を生成。`backend/src/deepDive.ts`から呼ばれ、`POST /api/deep-dive`のレスポンスになります。モック実装は、`relatedConcepts`をArticle Analysisの`concepts`から、`suggestedFollowUps`を`deepDiveQuestions`（今回の質問を除く）から実際に組み立てており、`answer`のみ固定文言です。
+- **4. Deep Dive**（`llm/deepDive.ts` / `deepDive.mock.ts` / `deepDive.vertex.ts` / `deepDiveFactory.ts`）: Article Analysisの結果・質問（`question`）・これまでの会話（`conversationHistory`）・（あれば）ユーザーの理解履歴（`userKnowledge`）から、その場の回答（`answer`）・関連する前提知識（`relatedConcepts`: `{ name, relation }[]`）・次の質問候補（`suggestedFollowUps`）を生成。`backend/src/deepDive.ts`が`deepDiveFactory.ts`の`getDeepDiveService()`（`LLM_PROVIDER`で`deepDive.mock.ts`/`deepDive.vertex.ts`を切り替え）を呼び、結果は`POST /api/deep-dive`のレスポンスになります。実LLM実装の詳細は次項を参照。
 
-> **注記**: Personalized Analysis・Knowledge Extraction・Deep Diveはまだ`llm/provider/`（次項）を使っておらず、それぞれの`*.mock.ts`が固定値/簡易ロジックを返すだけです。Article Analysisは実際に`llm/provider/`経由でVertex AI Geminiを呼ぶ実装（`articleAnalysis.vertex.ts`）を追加済みなので、他の処理を実LLM化する際の実例として参照してください。
+> **注記**: Personalized Analysis・Knowledge Extractionはまだ`llm/provider/`（次項）を使っておらず、それぞれの`*.mock.ts`が固定値/簡易ロジックを返すだけです。Article AnalysisとDeep Diveは実際に`llm/provider/`経由でVertex AI Geminiを呼ぶ実装を追加済みなので、残り2処理を実LLM化する際の実例として参照してください。
 
 ### Article Analysisの実LLM化（`articleAnalysis.vertex.ts`）
 
@@ -187,6 +200,22 @@ flowchart LR
 6. **ログ**: `[ArticleAnalysis] start`（provider/model/url）→（失敗時）`[ArticleAnalysis] validation failed, retrying once`→`[ArticleAnalysis] success`または`failed after retry`（provider/model/処理時間ms/retriedの有無）をサーバーログに出力します。記事本文全文やcredentialは出力しません。トークン使用量（`promptTokens`/`candidatesTokens`/`totalTokens`）は`vertexGeminiProvider.ts`側で`[VertexGeminiProvider] token usage`として出力します（`@google/genai`のレスポンスに含まれる`usageMetadata`をそのまま使うだけで、追加の実装は行っていません）。
 7. **timeout**: `llm/provider/vertexGeminiProvider.ts`が持つ既存の30秒タイムアウト（`AbortController`）をそのまま利用します。再試行時も同じタイムアウトが個別に適用されるため、最悪ケースでも無限待ちにはなりません（1回の呼び出しごとに最大30秒、再試行込みで最大2回）。
 8. **テスト容易性**: `createVertexArticleAnalysisService(getProvider)`という形でproviderの解決を関数として注入できるようにしており、テストではフェイクの`LlmProvider`を渡すことで、実際のVertex AI呼び出しなしに正常系・JSON parse失敗・schema validation失敗・再試行成功・再試行後も失敗・LLM呼び出しエラー（再試行しないこと）を検証しています（`articleAnalysis.vertex.test.ts`）。
+
+markdownコードフェンス対応のJSON抽出処理（`extractJsonText()`）は`llm/jsonExtraction.ts`に切り出し、後述のDeep Diveと共有しています。
+
+### Deep Diveの実LLM化（`deepDive.vertex.ts`）
+
+`LLM_PROVIDER=vertex`のとき、`deepDiveFactory.ts`が`vertexDeepDiveService`を選択します。Article Analysisとほぼ同じ構造（prompt生成→structured output→schema検証→1回だけ再試行）ですが、Deep Dive固有の点は以下の通りです。
+
+1. **記事コンテキストの扱い**: 記事本文全文は毎回再送せず、代わりに**Article Analysisの結果**（`summary`/`whyItMatters`/`concepts`/`entities`/`connections`）を読みやすいテキストに整形してプロンプトに含めます。ArticleAnalysisだけでは答えられない質問（記事に書かれていない詳細等）は、system promptの「記事や与えられたコンテキストだけで判断できない場合はその旨を明示し、断定しない」という指示でGemini側に誠実な回答を促す設計とし、記事本文の再送のような大きな構造変更は行っていません。
+2. **会話履歴の上限制御**: `conversationHistory`をそのままプロンプトに積み上げ続けると際限なく大きくなるため、`MAX_HISTORY_MESSAGES`（20件）を超える場合は**直近20件のみ**を使用し、古い発言から落とします（要約等の高度な圧縮はまだ行っていません）。
+3. **userKnowledge**: 渡されていれば「ユーザーがすでに理解していること」としてプロンプトに含めます。`undefined`または空配列でも問題なく動作します（永続化自体は未実装のため、現状は常に空です）。
+4. **system prompt**: 「単なる質問応答ではなく、今読んでいる記事・テーマを理解するための専用家庭教師として振る舞う」という役割、および回答方針（質問に直接答える→必要な背景を補足する、専門用語は説明する、会話履歴を踏まえて同じ説明を繰り返さない、ユーザーの既知の知識を前提に一段先を説明する、断定しない、長すぎる回答にしない、次の問いを提案する）を指示します。
+5. **structured output / validation / retry**: Article Analysisと同じ方式です（`deepDiveResponseSchema`を`z.toJSONSchema()`でJSON Schema化→`responseJsonSchema`として要求→`JSON.parse`+`deepDiveResponseSchema.safeParse`→失敗時1回だけ再試行→それでも失敗なら`LlmProviderError`）。**この2処理間で共有しているのは`extractJsonText()`のみ**で、リトライのオーケストレーションやログはあえて共通化せず各サービスに残しています（Article Analysisの既存実装への大規模なリファクタを避けるため）。
+6. **relatedConceptsの構造変更**: 元々`string[]`（概念名のみ）だったスキーマを`{ name: string; relation: string }[]`に変更しました（「今回の質問とどう関係するか」を明示するため）。`POST /api/deep-dive`のレスポンス形状は変わりますが、frontendはこのフィールドをまだ表示していないため実質的な影響はありません。
+7. **ログ**: `[DeepDive] start`（provider/model/`conversationLength`）→（失敗時）`validation failed, retrying once`→`success`/`failed after retry`（provider/model/処理時間ms/retriedの有無）。質問内容や会話全文はログに出しません。トークン使用量は`vertexGeminiProvider.ts`側の`[VertexGeminiProvider] token usage`で共通に出力されます。
+8. **timeout**: Article Analysisと同じく`vertexGeminiProvider.ts`の30秒タイムアウトをそのまま利用します。
+9. **テスト**: `deepDive.vertex.test.ts`でフェイクの`LlmProvider`を使い、正常系・JSON parse失敗からの再試行成功・schema validation失敗からの再試行成功・再試行後も失敗・LLM呼び出しエラー時に再試行しないこと・`conversationHistory`が実際にpromptへ渡ること・上限を超えた場合に古い発言が落ちること・`userKnowledge`未指定でも動作することを検証しています（実際のVertex AI通信なし）。
 
 ## LLMプロバイダー層（`llm/provider/`）
 
@@ -356,11 +385,10 @@ curl -X POST http://localhost:8787/api/llm/test \
 
 ## 今後の拡張ポイント（未実装）
 
-- `llm/deepDive.mock.ts` を、Article Analysis（`articleAnalysis.vertex.ts`）と同じパターンで実LLM化する（`deepDive.vertex.ts`を追加し、`articleAnalysisFactory.ts`と同様のfactoryを`deepDive.ts`（backend直下）に組み込む）
+- `POST /api/deep-dive`の対話ログをKnowledge Extraction（`llm/knowledgeExtraction.ts`）に渡し、実LLM化する導線（「理解したことを抽出・保存」の仕組み）
 - `POST /api/llm/test`は開発用の疎通確認APIのため、他の処理の実LLM化が進んだら削除を検討する
-- 記事本文の切り詰め（`MAX_CONTENT_LENGTH`、現状12,000文字の単純な文字数カット）を、文の区切りを考慮した切り詰めや要約前処理に改善する
-- `POST /api/deep-dive`の対話ログをKnowledge Extractionに渡す導線（「理解したことを抽出・保存」の仕組み）
-- Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提）
+- 記事本文の切り詰め（`MAX_CONTENT_LENGTH`、現状12,000文字の単純な文字数カット）や会話履歴の切り詰め（`MAX_HISTORY_MESSAGES`、直近20件のみ保持）を、文の区切りを考慮した切り詰めや要約による圧縮に改善する
+- Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提。`userKnowledge`は現状Deep Diveに渡す口だけあり、永続化されていないため常に空）
 - JavaScriptレンダリングが必要なサイトへの対応（ヘッドレスブラウザの導入）
 - 解析結果・深掘りの会話履歴・ユーザーの理解履歴のMongoDBへの永続化
 - ルーティングが増えた場合の分割（現状は `index.ts` に直書き）

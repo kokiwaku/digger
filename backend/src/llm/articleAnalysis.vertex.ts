@@ -2,6 +2,7 @@ import { z } from "zod";
 import { articleAnalysisSchema, type ArticleAnalysisInput, type ArticleAnalysisService } from "./articleAnalysis.js";
 import { getLlmProvider } from "./provider/llmProviderFactory.js";
 import { LlmProviderError } from "./provider/llmProviderError.js";
+import { extractJsonText } from "./jsonExtraction.js";
 import type { LlmProvider } from "./provider/llmProvider.js";
 
 // 記事本文をそのまま無制限にLLMへ送らないための安全弁。トークン数ではなく文字数で単純に
@@ -60,13 +61,6 @@ ${content}
 
 const RETRY_INSTRUCTION =
   "前回の出力がschemaに適合しなかったため、指定schemaに厳密に従って再生成してください。";
-
-function extractJsonText(text: string): string {
-  // responseMimeType=application/jsonを指定していれば通常そのままJSONが返るが、
-  // 念のためmarkdownのコードフェンスで囲まれているケースにも対応しておく。
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  return (fenced ? fenced[1] : text).trim();
-}
 
 async function requestOnce(provider: LlmProvider, input: ArticleAnalysisInput, extraInstruction?: string) {
   const text = await provider.generateText({
