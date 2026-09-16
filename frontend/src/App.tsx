@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 import type { ArticleAnalysis, Concept, ConversationTurn, DeepDiveResponse, DigResult } from "./types";
 
@@ -112,6 +112,38 @@ function DeepDiveInputForm({
   );
 }
 
+function usePrefersReducedMotion(): boolean {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const handleChange = () => setPrefersReducedMotion(mediaQuery.matches);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
+// Diggerのキャラクター（掘るモグラ）のローディング表示。通常のspinnerの代わりに使う。
+// prefers-reduced-motionが有効な環境では、GIFではなく静止フレームを表示する。
+function MoleLoader({ label }: { label: string }) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+
+  return (
+    <div className="mole-loader" role="status" aria-live="polite">
+      <img
+        className="mole-loader-image"
+        src={prefersReducedMotion ? "/assets/frames/mole-dig-1.png" : "/assets/digger-mole-dig.gif"}
+        alt="Diggerが掘っています"
+      />
+      <p className="mole-loader-label">{label}</p>
+    </div>
+  );
+}
+
 // 前提知識1件分。名前だけの軽い行として表示し、クリックした場合だけ説明を展開する。
 function ConceptDisclosure({ concept }: { concept: Concept }) {
   const [expanded, setExpanded] = useState(false);
@@ -179,7 +211,10 @@ export default function App() {
 
   return (
     <div className="page">
-      <h1 className="brand">Digger</h1>
+      <h1 className="brand">
+        <img className="brand-icon" src="/assets/frames/mole-icon.png" alt="" aria-hidden="true" />
+        Digger
+      </h1>
       <p className="tagline">興味を持ったことを深掘りし、理解を蓄積していくためのツール</p>
 
       <form className="dig-form" onSubmit={handleSubmit}>
@@ -196,7 +231,7 @@ export default function App() {
         </button>
       </form>
 
-      {state.status === "loading" && <p className="loading-message">記事を読み解いています…</p>}
+      {state.status === "loading" && <MoleLoader label="記事を掘っています…" />}
 
       {state.status === "error" && <p className="error-message">エラー: {state.message}</p>}
 
@@ -226,6 +261,7 @@ export default function App() {
                   loadingLabel="掘っています..."
                 />
 
+                {deepDiveState.status === "loading" && <MoleLoader label="もう少し掘っています…" />}
                 {deepDiveState.status === "error" && <p className="error-message">エラー: {deepDiveState.message}</p>}
               </section>
 
@@ -308,6 +344,7 @@ export default function App() {
                 ))}
               </div>
 
+              {deepDiveState.status === "loading" && <MoleLoader label="もう少し掘っています…" />}
               {deepDiveState.status === "error" && <p className="error-message">エラー: {deepDiveState.message}</p>}
 
               <DeepDiveInputForm
