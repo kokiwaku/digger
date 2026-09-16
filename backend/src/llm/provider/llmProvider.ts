@@ -5,6 +5,9 @@
 export type GenerateTextInput = {
   systemPrompt?: string;
   prompt: string;
+  // 構造化出力を要求する場合の標準JSON Schema。JSON Schema自体はベンダー中立な仕様であり、
+  // 対応していないproviderはこのフィールドを無視してよい（例: MockLlmProvider）。
+  responseJsonSchema?: Record<string, unknown>;
 };
 
 export interface LlmProvider {

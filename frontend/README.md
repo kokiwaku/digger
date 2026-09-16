@@ -37,7 +37,7 @@ flowchart TD
 - **`main.tsx`**: `App` を `React.StrictMode` でラップしてDOMにマウントするだけの薄いエントリーポイント。
 - **`App.tsx`**:
   - `API_BASE_URL` は `import.meta.env.VITE_API_BASE_URL`（未設定時は `http://localhost:8787` にフォールバック）。
-  - フォームでURLを入力し「掘る」を押すと `digUrl()` が `POST /api/dig` を呼び出します。バックエンドが実際にURLへアクセスして抽出した`title`と、Article Analysis（現状はモック実装）による解析結果が表示されます。
+  - フォームでURLを入力し「掘る」を押すと `digUrl()` が `POST /api/dig` を呼び出します。バックエンドが実際にURLへアクセスして抽出した`title`と、Article Analysis（backendの`LLM_PROVIDER`に応じてモックまたはVertex AI Geminiによる実解析）の結果が表示されます。ローディング中は「記事を読み解いています…」と表示します。
   - 状態は `DigState`（`idle` / `loading` / `error` / `success`）という判別可能なユニオン型1つで管理し、状態管理ライブラリは使わず `useState` のみです。
   - 成功時はレスポンス（`DigResult`）を「まずこれだけ（`summary`）」「なぜ重要？（`whyItMatters`）」「理解するための前提（`concepts`、カード風の`<button>`一覧）」「この話とのつながり（`connections`）」「次に掘るなら（`deepDiveQuestions`、ボタン風の`<button>`一覧）」の順で表示します。`concepts`カードはクリックしても現状は何も起きません（深掘り導線は未実装）。`entities`（関連する人物・組織）は型には含まれていますが、このUIではまだ表示していません。
   - **深掘りチャット**: 解析結果の下に「他に気になることは？」セクションがあり、`messages: ChatMessage[]`（`useState`）でチャットのやり取りを保持します。「次に掘るなら」の質問ボタン、回答内の`suggestedFollowUps`ボタン、自由入力欄のいずれから質問しても、同じ`handleDeepDive(questionText)`関数が呼ばれ、同じ`askDeepDive()`（`POST /api/deep-dive`）を叩きます。送信のたびに、それまでの`messages`を`{ role, content }[]`に変換して`conversationHistory`として一緒に送ります。ページ遷移はせず、`messages`にユーザーの質問とDiggerの回答を追記していくだけです。深掘り用のローディング/エラー状態は`DeepDiveState`という別のstateで、記事解析の`DigState`とは独立しています。
@@ -78,7 +78,7 @@ npm install
 npm run dev
 ```
 
-`http://localhost:5173` を開き、URL入力欄に記事URLを入れて「掘る」を押すと、実際に取得したタイトルとArticle Analysis（現状はモック実装、日銀の利上げに関するデモデータ）の解析結果が表示されます。バックエンドが起動していない、またはURLが不正だとエラーメッセージが表示されます。その下の「他に気になることは？」欄から自由入力、または「次に掘るなら」の質問ボタンをクリックすると、その場でチャット形式の深掘りができます（現状はモック応答）。
+`http://localhost:5173` を開き、URL入力欄に記事URLを入れて「掘る」を押すと、実際に取得したタイトルとArticle Analysisの解析結果が表示されます（backendが`LLM_PROVIDER=mock`なら日銀の利上げに関する固定デモデータ、`LLM_PROVIDER=vertex`なら実際の記事内容に応じたVertex AI Geminiの解析結果）。バックエンドが起動していない、またはURLが不正だとエラーメッセージが表示されます。その下の「他に気になることは？」欄から自由入力、または「次に掘るなら」の質問ボタンをクリックすると、その場でチャット形式の深掘りができます（Deep Diveは現状もモック応答）。
 
 ## 今後の拡張ポイント（未実装）
 

@@ -50,7 +50,7 @@ flowchart LR
 
 バックエンドは入力されたURLに実際にアクセスしてHTMLを取得し、[Mozilla Readability](https://github.com/mozilla/readability)（Firefoxのリーダービューと同じ抽出エンジン）でnav/footer/広告などを除いた本文と`title`を抽出します。ニュースサイト専用のパースは行わず、一般的なWeb記事を対象にした構造です。
 
-抽出した本文は「Article Analysis」というLLM処理（[`backend/README.md`](backend/README.md#llm処理article-analysis--personalized-analysis--knowledge-extraction)を参照）に渡され、要約・重要性・前提知識・関連人物や組織・関連トピック・深掘りの問いを生成します。**現時点では実際のLLM APIは呼ばず、固定のモック実装（日銀の利上げに関するサンプルデータ）を返します。** ただし型・インターフェースは本物のLLM実装に差し替えられる形で用意済みです。
+抽出した本文は「Article Analysis」というLLM処理（[`backend/README.md`](backend/README.md#llm処理article-analysis--personalized-analysis--knowledge-extraction--deep-dive)を参照）に渡され、要約・重要性・前提知識・関連人物や組織・関連トピック・深掘りの問いを生成します。環境変数`LLM_PROVIDER`で切り替え可能で、`mock`（デフォルト）なら固定のデモデータ（日銀の利上げに関するサンプル）、`vertex`ならGoogle Cloud Vertex AI Geminiが実際の記事内容を解析した結果を返します。
 
 ```
 POST /api/dig
@@ -207,9 +207,9 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出、およびGoogle Cloud Vertex AI（Gemini）への最小限の疎通確認は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、およびArticle AnalysisのVertex AI（Gemini）実LLM化は実装済みですが、以下は未実装・未設計です。
 
-- Article Analysis・Deep Dive（`backend/src/llm/`）を、実装済みのVertex AI疎通確認（`llm/provider/`）を使って実際に接続する
+- Deep Dive（`backend/src/llm/`）を、Article Analysisと同じパターンでVertex AI Geminiに実際に接続する
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線と、ユーザーの理解履歴のデータモデル
 - Knowledge Extraction（深掘り対話から学習候補を抽出するLLM処理）を実際の深掘り対話（`/api/deep-dive`）に接続する
 - 解析結果・深掘りの会話履歴・ユーザーの理解履歴のMongoDBへの永続化

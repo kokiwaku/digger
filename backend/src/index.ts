@@ -48,6 +48,15 @@ app.post("/api/dig", async (c) => {
     if (err instanceof ArticleFetchError) {
       return c.json({ error: err.message }, err.status);
     }
+    if (err instanceof LlmProviderError) {
+      console.error("[api/dig] Article Analysis provider error", {
+        code: err.code,
+        message: err.message,
+        cause: err.cause,
+      });
+      const { status, message: safeMessage } = toSafeApiResponse(err);
+      return c.json({ error: safeMessage }, status);
+    }
     const message = err instanceof Error ? err.message : "記事の解析に失敗しました";
     return c.json({ error: message }, 502);
   }
