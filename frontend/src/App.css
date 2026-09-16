@@ -107,6 +107,73 @@
   line-height: 1.7;
 }
 
+.section-subtle {
+  margin: 0.6rem 0 0;
+  font-size: 0.9rem;
+  color: #666;
+  line-height: 1.6;
+}
+
+.primary-card {
+  padding: 1.1rem 1.25rem;
+  border-radius: 12px;
+  background: #fafafa;
+  border: 1px solid #eee;
+}
+
+.link-button {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  color: #2b6cb0;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-button:hover {
+  color: #1a4971;
+}
+
+.details-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #eee;
+}
+
+.card-toggle-hint {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #2b6cb0;
+}
+
+.entity-item {
+  padding: 0.75rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.entity-name {
+  margin: 0 0 0.2rem;
+  font-weight: 600;
+}
+
+.entity-description {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #555;
+  line-height: 1.6;
+}
+
 .card-list {
   list-style: none;
   margin: 0;

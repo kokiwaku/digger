@@ -1,6 +1,6 @@
 import { useState } from "react";
 import "./App.css";
-import type { ArticleAnalysis, ConversationTurn, DeepDiveResponse, DigResult } from "./types";
+import type { ArticleAnalysis, Concept, ConversationTurn, DeepDiveResponse, DigResult } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 
@@ -15,6 +15,19 @@ type ChatMessage =
   | { role: "assistant"; content: string; suggestedFollowUps: string[] };
 
 type DeepDiveState = { status: "idle" } | { status: "loading" } | { status: "error"; message: string };
+
+// バックエンドが生成する文章量と、最初にユーザーへ見せる文章量は別物として扱う。
+// summary/whyItMattersは長めに返ってくることがあるため、Primary Viewでは冒頭の
+// 数文だけを切り出し、残りはSecondary Information（詳細パネル）でのみ表示する。
+function firstSentences(text: string, maxSentences: number): string {
+  const sentences = text.match(/[^。！？]*[。！？]|[^。！？]+$/g);
+  if (!sentences) return text.trim();
+  return sentences.slice(0, maxSentences).join("").trim();
+}
+
+function hasMoreText(full: string, shown: string): boolean {
+  return full.trim().length > shown.trim().length;
+}
 
 async function digUrl(url: string): Promise<DigResult> {
   const res = await fetch(`${API_BASE_URL}/api/dig`, {
@@ -54,9 +67,35 @@ async function askDeepDive(
   return body as DeepDiveResponse;
 }
 
+// 前提知識カード。初期状態は短い1文だけを表示し、クリックすると全文を展開する
+// （descriptionが1文で収まっている場合は展開の余地がないのでボタン化しない）。
+function ConceptCard({ concept }: { concept: Concept }) {
+  const [expanded, setExpanded] = useState(false);
+  const shortDescription = firstSentences(concept.description, 1);
+  const expandable = hasMoreText(concept.description, shortDescription);
+
+  return (
+    <li>
+      <button
+        type="button"
+        className="concept-card"
+        onClick={() => expandable && setExpanded((v) => !v)}
+        aria-expanded={expandable ? expanded : undefined}
+      >
+        <p className="concept-card-title">{concept.name}</p>
+        <p className="concept-card-summary">{expanded ? concept.description : shortDescription}</p>
+        {expandable && <span className="card-toggle-hint">{expanded ? "閉じる" : "詳しく見る"}</span>}
+      </button>
+    </li>
+  );
+}
+
 export default function App() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<DigState>({ status: "idle" });
+
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const [showAllQuestions, setShowAllQuestions] = useState(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
@@ -67,6 +106,8 @@ export default function App() {
     setState({ status: "loading" });
     setMessages([]);
     setDeepDiveState({ status: "idle" });
+    setDetailsExpanded(false);
+    setShowAllQuestions(false);
     try {
       const result = await digUrl(url);
       setState({ status: "success", result });
@@ -97,6 +138,19 @@ export default function App() {
     }
   };
 
+  const analysis = state.status === "success" ? state.result.analysis : null;
+  const requiredConcepts = analysis?.concepts.filter((c) => c.importance === "required").slice(0, 3) ?? [];
+  const helpfulConcepts = analysis?.concepts.filter((c) => c.importance !== "required") ?? [];
+  const [topQuestion, ...restQuestions] = analysis?.deepDiveQuestions ?? [];
+  const shortSummary = analysis ? firstSentences(analysis.summary, 3) : "";
+  const shortWhyItMatters = analysis ? firstSentences(analysis.whyItMatters, 1) : "";
+  const hasSecondaryInfo =
+    analysis !== null &&
+    (hasMoreText(analysis.whyItMatters, shortWhyItMatters) ||
+      helpfulConcepts.length > 0 ||
+      analysis.connections.length > 0 ||
+      analysis.entities.length > 0);
+
   return (
     <div className="page">
       <h1 className="brand">Digger</h1>
@@ -120,66 +174,126 @@ export default function App() {
 
       {state.status === "error" && <p className="error-message">エラー: {state.message}</p>}
 
-      {state.status === "success" && (
+      {state.status === "success" && analysis && (
         <article className="result">
           <header>
             <h2 className="result-title">{state.result.source.title}</h2>
             <span className="result-source-url">{state.result.source.url}</span>
           </header>
 
-          <section>
-            <h3 className="section-label">まずこれだけ</h3>
-            <p className="section-body">{state.result.analysis.summary}</p>
+          <section className="primary-card">
+            <h3 className="section-label">この記事で大事なのは</h3>
+            <p className="section-body">{shortSummary}</p>
+            {shortWhyItMatters && <p className="section-subtle">なぜ重要？ {shortWhyItMatters}</p>}
           </section>
 
-          <section>
-            <h3 className="section-label">なぜ重要？</h3>
-            <p className="section-body">{state.result.analysis.whyItMatters}</p>
-          </section>
+          {requiredConcepts.length > 0 && (
+            <section>
+              <h3 className="section-label">まず知っておくこと</h3>
+              <ul className="card-list">
+                {requiredConcepts.map((concept) => (
+                  <ConceptCard key={concept.id} concept={concept} />
+                ))}
+              </ul>
+            </section>
+          )}
 
-          <section>
-            <h3 className="section-label">理解するための前提</h3>
-            <ul className="card-list">
-              {state.result.analysis.concepts.map((concept) => (
-                <li key={concept.id}>
-                  <button type="button" className="concept-card">
-                    <p className="concept-card-title">{concept.name}</p>
-                    <p className="concept-card-summary">{concept.description}</p>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section>
-            <h3 className="section-label">この話とのつながり</h3>
-            <ul className="connection-list">
-              {state.result.analysis.connections.map((connection) => (
-                <li key={connection.topic} className="connection-item">
-                  <p className="connection-topic">{connection.topic}</p>
-                  <p className="connection-relation">→ {connection.relation}</p>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section>
-            <h3 className="section-label">次に掘るなら</h3>
-            <ul className="card-list">
-              {state.result.analysis.deepDiveQuestions.map((deepDiveQuestion) => (
-                <li key={deepDiveQuestion}>
+          {topQuestion && (
+            <section>
+              <h3 className="section-label">次に掘るなら</h3>
+              <ul className="card-list">
+                <li>
                   <button
                     type="button"
                     className="question-button"
                     disabled={deepDiveState.status === "loading"}
-                    onClick={() => handleDeepDive(deepDiveQuestion)}
+                    onClick={() => handleDeepDive(topQuestion)}
                   >
-                    → {deepDiveQuestion}
+                    → {topQuestion}
                   </button>
                 </li>
-              ))}
-            </ul>
-          </section>
+              </ul>
+              {restQuestions.length > 0 && !showAllQuestions && (
+                <button type="button" className="link-button" onClick={() => setShowAllQuestions(true)}>
+                  他の質問を見る（{restQuestions.length}件）
+                </button>
+              )}
+              {showAllQuestions && (
+                <ul className="card-list">
+                  {restQuestions.map((deepDiveQuestion) => (
+                    <li key={deepDiveQuestion}>
+                      <button
+                        type="button"
+                        className="question-button"
+                        disabled={deepDiveState.status === "loading"}
+                        onClick={() => handleDeepDive(deepDiveQuestion)}
+                      >
+                        → {deepDiveQuestion}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {hasSecondaryInfo && !detailsExpanded && (
+            <button type="button" className="link-button" onClick={() => setDetailsExpanded(true)}>
+              もう少し詳しく見る
+            </button>
+          )}
+
+          {hasSecondaryInfo && detailsExpanded && (
+            <div className="details-panel">
+              <button type="button" className="link-button" onClick={() => setDetailsExpanded(false)}>
+                詳細を閉じる
+              </button>
+
+              <section>
+                <h3 className="section-label">なぜ重要？</h3>
+                <p className="section-body">{analysis.whyItMatters}</p>
+              </section>
+
+              {helpfulConcepts.length > 0 && (
+                <section>
+                  <h3 className="section-label">知っているとさらに理解が深まること</h3>
+                  <ul className="card-list">
+                    {helpfulConcepts.map((concept) => (
+                      <ConceptCard key={concept.id} concept={concept} />
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {analysis.connections.length > 0 && (
+                <section>
+                  <h3 className="section-label">この話とのつながり</h3>
+                  <ul className="connection-list">
+                    {analysis.connections.map((connection) => (
+                      <li key={connection.topic} className="connection-item">
+                        <p className="connection-topic">{connection.topic}</p>
+                        <p className="connection-relation">→ {connection.relation}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {analysis.entities.length > 0 && (
+                <section>
+                  <h3 className="section-label">関連する人物・組織など</h3>
+                  <ul className="card-list">
+                    {analysis.entities.map((entity) => (
+                      <li key={entity.name} className="entity-item">
+                        <p className="entity-name">{entity.name}</p>
+                        {entity.description && <p className="entity-description">{entity.description}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
+          )}
 
           <section className="deep-dive">
             <h3 className="section-label">他に気になることは？</h3>
