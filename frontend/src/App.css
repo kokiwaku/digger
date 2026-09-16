@@ -68,9 +68,33 @@
   font-size: 0.9rem;
 }
 
-.loading-message {
-  color: #666;
+/* Diggerのキャラクター（掘るモグラ）のローディング表示。全画面を覆わず、
+   処理中のエリアに自然に差し込む想定。サイズはデスクトップ96px/モバイル72px。 */
+.mole-loader {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
   margin-bottom: 1.5rem;
+}
+
+.mole-loader-image {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.mole-loader-label {
+  margin: 0;
+  color: #666;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 480px) {
+  .mole-loader-image {
+    width: 72px;
+    height: 72px;
+  }
 }
 
 .result {
