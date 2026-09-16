@@ -159,10 +159,6 @@
   align-self: flex-end;
 }
 
-.hint-area {
-  margin-top: 0.25rem;
-}
-
 .secondary-links {
   display: flex;
   gap: 1.25rem;
@@ -202,23 +198,6 @@
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-}
-
-.question-button {
-  width: 100%;
-  text-align: left;
-  padding: 0.9rem 1rem;
-  border: 1px solid #ddd;
-  border-radius: 10px;
-  background: #fafafa;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 500;
-}
-
-.question-button:hover {
-  border-color: #2b6cb0;
-  background: #f2f7fc;
 }
 
 /* 前提知識: カードではなく、名前だけの軽い行。クリックすると説明を展開する。 */
@@ -336,13 +315,3 @@
   white-space: pre-wrap;
 }
 
-.followup-area {
-  margin-top: 0.75rem;
-}
-
-.followup-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  margin-top: 0.5rem;
-}

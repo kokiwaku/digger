@@ -10,9 +10,10 @@ type DigState =
   | { status: "error"; message: string }
   | { status: "success"; result: DigResult };
 
-type ChatMessage =
-  | { role: "user"; content: string }
-  | { role: "assistant"; content: string; suggestedFollowUps: string[] };
+// deepDiveQuestions/suggestedFollowUpsはAI主導の「次の質問」提案のため、Diggerの
+// 「ユーザー自身の疑問を起点に掘る」という方針に合わせてUI上は表示しない。
+// レスポンスは受け取るが、会話ログにはrole/contentだけを保持する。
+type ChatMessage = { role: "user" | "assistant"; content: string };
 
 type DeepDiveState = { status: "idle" } | { status: "loading" } | { status: "error"; message: string };
 
@@ -131,9 +132,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [deepDiveState, setDeepDiveState] = useState<DeepDiveState>({ status: "idle" });
-  const [revealedFollowUps, setRevealedFollowUps] = useState<Set<number>>(new Set());
 
-  const [showHints, setShowHints] = useState(false);
   const [showConcepts, setShowConcepts] = useState(false);
   const [showBackground, setShowBackground] = useState(false);
   const [showSummaryInChat, setShowSummaryInChat] = useState(false);
@@ -143,8 +142,6 @@ export default function App() {
     setState({ status: "loading" });
     setMessages([]);
     setDeepDiveState({ status: "idle" });
-    setRevealedFollowUps(new Set());
-    setShowHints(false);
     setShowConcepts(false);
     setShowBackground(false);
     setShowSummaryInChat(false);
@@ -168,23 +165,12 @@ export default function App() {
 
     try {
       const response = await askDeepDive(state.result.analysis, trimmed, history);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: response.answer, suggestedFollowUps: response.suggestedFollowUps },
-      ]);
+      // response.suggestedFollowUpsはAI主導の次の質問提案のためUIには表示しない（受け取るだけ）。
+      setMessages((prev) => [...prev, { role: "assistant", content: response.answer }]);
       setDeepDiveState({ status: "idle" });
     } catch (err) {
       setDeepDiveState({ status: "error", message: err instanceof Error ? err.message : "深掘りに失敗しました" });
     }
-  };
-
-  const toggleFollowUps = (index: number) => {
-    setRevealedFollowUps((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
   };
 
   const analysis = state.status === "success" ? state.result.analysis : null;
@@ -241,31 +227,6 @@ export default function App() {
                 />
 
                 {deepDiveState.status === "error" && <p className="error-message">エラー: {deepDiveState.message}</p>}
-
-                {analysis.deepDiveQuestions.length > 0 && (
-                  <div className="hint-area">
-                    {!showHints ? (
-                      <button type="button" className="link-button" onClick={() => setShowHints(true)}>
-                        質問が浮かばないときはヒントを見る
-                      </button>
-                    ) : (
-                      <ul className="card-list">
-                        {analysis.deepDiveQuestions.slice(0, 3).map((deepDiveQuestion) => (
-                          <li key={deepDiveQuestion}>
-                            <button
-                              type="button"
-                              className="question-button"
-                              disabled={deepDiveState.status === "loading"}
-                              onClick={() => handleDeepDive(deepDiveQuestion)}
-                            >
-                              → {deepDiveQuestion}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
               </section>
 
               <div className="secondary-links">
@@ -343,29 +304,6 @@ export default function App() {
                     className={message.role === "user" ? "chat-bubble chat-user" : "chat-message chat-assistant"}
                   >
                     <p className="chat-content">{message.content}</p>
-                    {message.role === "assistant" && message.suggestedFollowUps.length > 0 && (
-                      <div className="followup-area">
-                        {!revealedFollowUps.has(index) ? (
-                          <button type="button" className="link-button" onClick={() => toggleFollowUps(index)}>
-                            次の問いを見る
-                          </button>
-                        ) : (
-                          <div className="followup-list">
-                            {message.suggestedFollowUps.map((followUp) => (
-                              <button
-                                key={followUp}
-                                type="button"
-                                className="question-button"
-                                disabled={deepDiveState.status === "loading"}
-                                onClick={() => handleDeepDive(followUp)}
-                              >
-                                → {followUp}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
@@ -377,9 +315,9 @@ export default function App() {
                 onChange={setQuestion}
                 onSubmit={() => handleDeepDive(question)}
                 loading={deepDiveState.status === "loading"}
-                placeholder="さらに聞きたいことを入力..."
-                submitLabel="送る"
-                loadingLabel="送信中..."
+                placeholder="さらに気になることを入力してください"
+                submitLabel="掘る"
+                loadingLabel="掘っています..."
               />
             </section>
           )}

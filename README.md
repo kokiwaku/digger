@@ -84,9 +84,9 @@ Content-Type: application/json
 }
 ```
 
-記事本文そのものはレスポンスに含めていません（フロントエンドへ大量のテキストを返さないため）。前提知識（`concepts`）は表示のみで、深掘りの問い（`deepDiveQuestions`）は下記の「深掘り対話機能」から実際に質問できます。
+記事本文そのものはレスポンスに含めていません（フロントエンドへ大量のテキストを返さないため）。前提知識（`concepts`）は表示のみです。`deepDiveQuestions`（AIが提示する次の質問候補）はデータとしては返しますが、**Diggerの「ユーザー自身の疑問を起点に掘る」という方針により、frontendのUIには一切表示していません**。深掘りは常に下記の自由入力欄から行います。
 
-画面はこの解析結果を並べた「情報カード中心」のUIではなく、**会話中心**のUIです。記事を掘った直後に見えるのは、短い地の文の要約（`summary`の冒頭3文）と「この記事について、何が気になりますか？」という大きめの自由入力欄（テキストエリア、Enterで送信・Shift+Enterで改行）のみです。`concepts`・`whyItMatters`・`connections`・`entities`・AIが提示した`deepDiveQuestions`はカードとして並べず、「前提知識を見る」「この記事の背景」「ヒントを見る」という控えめなリンクからのみ、ユーザーが望んだ場合に表示されます。ユーザーが最初の質問を送ると画面はほぼ会話のみの表示に切り替わり、記事情報は退いて会話に集中できるようにしています（詳細は[`frontend/README.md`](frontend/README.md)を参照）。
+画面はこの解析結果を並べた「情報カード中心」のUIではなく、**会話中心**のUIです。記事を掘った直後に見えるのは、短い地の文の要約（`summary`の冒頭3文）と「この記事について、何が気になりますか？」という大きめの自由入力欄（テキストエリア、Enterで送信・Shift+Enterで改行）のみです。`concepts`・`whyItMatters`・`connections`・`entities`はカードとして並べず、「前提知識を見る」「この記事の背景」という控えめなリンクからのみ、ユーザーが望んだ場合に表示されます。ユーザーが最初の質問を送ると画面はほぼ会話のみの表示に切り替わり、記事情報は退いて会話に集中できるようにしています（詳細は[`frontend/README.md`](frontend/README.md)を参照）。
 
 ## 深掘り対話機能
 
@@ -103,9 +103,9 @@ Content-Type: application/json
 }
 ```
 
-- 「次に掘るなら」の質問ボタンをクリックした場合も、自由入力欄に質問を入力した場合も、同じ`/api/deep-dive`が呼ばれます。
+- 質問は常に自由入力欄から行います（AIが提示する質問候補をクリックする導線はUI上にありません）。
 - 2回目以降の質問では、これまでの会話（`{ role: "user" | "assistant", content: string }[]`）を`conversationHistory`として送ります。
-- 成功時のレスポンスは `{ answer, relatedConcepts, suggestedFollowUps }`。回答本文に加え、関連する前提知識と次の質問候補が返り、`suggestedFollowUps`も新たにクリック可能なボタンとして表示されます。
+- 成功時のレスポンスは `{ answer, relatedConcepts, suggestedFollowUps }`。**frontendは`answer`のみを表示し、`relatedConcepts`/`suggestedFollowUps`は受け取っても画面には出しません**（Diggerの「ユーザー自身の疑問を起点に掘る」という方針のため）。backendの型・schemaはこれらのフィールドを引き続き保持しています（将来的な別用途のため）。
 - **現時点ではLLM未接続のため、`answer`は固定のモック文言です**（`backend/src/llm/deepDive.mock.ts`）。`relatedConcepts`と`suggestedFollowUps`は記事の解析結果（`concepts`/`deepDiveQuestions`）から実際に組み立てています。
 - 会話履歴はMongoDBにはまだ保存されません（ページをリロードすると消えます）。認証も不要です。
 
