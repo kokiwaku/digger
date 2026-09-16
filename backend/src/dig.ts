@@ -1,7 +1,5 @@
 import { fetchArticle } from "./articleFetcher.js";
-// LLMの実装を差し替えるときは、このimportを本物の実装に変えるだけでよい
-// （ArticleAnalysisServiceインターフェースは変わらない想定）。
-import { mockArticleAnalysisService as articleAnalysisService } from "./llm/articleAnalysis.mock.js";
+import { getArticleAnalysisService } from "./llm/articleAnalysisFactory.js";
 import type { DigResult } from "./types.js";
 
 export function parseArticleUrl(rawUrl: unknown): URL {
@@ -23,13 +21,13 @@ export function parseArticleUrl(rawUrl: unknown): URL {
   return parsed;
 }
 
-// 記事の取得・本文抽出は articleFetcher.ts が担当し、Article Analysis（LLM処理、現在はモック）が
-// summary/whyItMatters/concepts/entities/connections/deepDiveQuestions を生成する。
-// ユーザーの知識・履歴は渡さない（Personalized AnalysisはArticle Analysisの後段の別処理）。
+// 記事の取得・本文抽出は articleFetcher.ts が担当し、Article Analysis（LLM処理。LLM_PROVIDERで
+// mock/vertexを切り替え）が summary/whyItMatters/concepts/entities/connections/deepDiveQuestions
+// を生成する。ユーザーの知識・履歴は渡さない（Personalized AnalysisはArticle Analysisの後段の別処理）。
 export async function buildDigResult(url: URL): Promise<DigResult> {
   const article = await fetchArticle(url);
 
-  const analysis = await articleAnalysisService.analyze({
+  const analysis = await getArticleAnalysisService().analyze({
     title: article.title,
     url: url.toString(),
     content: article.textContent,

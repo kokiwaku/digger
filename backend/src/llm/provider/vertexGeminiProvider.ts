@@ -93,8 +93,24 @@ export class VertexGeminiProvider implements LlmProvider {
         config: {
           systemInstruction: input.systemPrompt,
           abortSignal: controller.signal,
+          // responseJsonSchemaが指定された場合のみ構造化出力(JSON)を要求する。
+          // 未指定の場合は通常のテキスト応答（既存の /api/llm/test 等の挙動を変えない）。
+          ...(input.responseJsonSchema
+            ? { responseMimeType: "application/json", responseJsonSchema: input.responseJsonSchema }
+            : {}),
         },
       });
+
+      // credentialや本文全文はログに出さず、トークン使用量だけ記録する。
+      const usage = response.usageMetadata;
+      if (usage) {
+        console.log("[VertexGeminiProvider] token usage", {
+          model: this.model,
+          promptTokens: usage.promptTokenCount,
+          candidatesTokens: usage.candidatesTokenCount,
+          totalTokens: usage.totalTokenCount,
+        });
+      }
 
       const text = response.text?.trim();
       if (!text) {

@@ -116,6 +116,8 @@ export default function App() {
         </button>
       </form>
 
+      {state.status === "loading" && <p className="loading-message">記事を読み解いています…</p>}
+
       {state.status === "error" && <p className="error-message">エラー: {state.message}</p>}
 
       {state.status === "success" && (

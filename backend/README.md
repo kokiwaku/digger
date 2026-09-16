@@ -20,11 +20,15 @@ backend/
 │   ├── network.test.ts                         # network.ts のユニットテスト
 │   ├── robots.test.ts                           # robots.ts のユニットテスト
 │   ├── llmTest.test.ts                           # llmTest.ts のユニットテスト
-│   └── llm/                                        # LLMを使う4処理の型・schema・interface・モック実装
+│   └── llm/                                        # LLMを使う4処理の型・schema・interface・モック/実LLM実装
 │       ├── conversation.ts                           # 会話ターンの共通型（Knowledge Extraction / Deep Diveで共用）
 │       ├── articleAnalysis.ts                        # 型・zod schema・ArticleAnalysisService interface
 │       ├── articleAnalysis.mock.ts                    # モック実装（固定のデモ用サンプルを返す）
 │       ├── articleAnalysis.mock.test.ts                # モック実装のユニットテスト
+│       ├── articleAnalysis.vertex.ts                     # 実LLM実装（Gemini呼び出し＋prompt生成＋schema検証＋1回だけ再試行）
+│       ├── articleAnalysis.vertex.test.ts                 # 上記のユニットテスト（フェイクのLlmProviderを使用、ネットワーク未使用）
+│       ├── articleAnalysisFactory.ts                        # LLM_PROVIDER環境変数によるArticleAnalysisService切り替え
+│       ├── articleAnalysisFactory.test.ts                    # 上記のユニットテスト
 │       ├── personalizedAnalysis.ts                       # 型・zod schema・PersonalizedAnalysisService interface
 │       ├── personalizedAnalysis.mock.ts                   # モック実装（concept名の単純一致で既知/未知を判定）
 │       ├── personalizedAnalysis.mock.test.ts               # モック実装のユニットテスト
@@ -71,8 +75,14 @@ flowchart TD
     J -->|"fetch(url)"| K["対象Webサイト"]
     K -->|HTML| J
     J -->|"JSDOM + Readability<br/>title / textContent"| I
-    I -->|"analyze({ title, url, content })"| L["llm/articleAnalysis.mock.ts<br/>ArticleAnalysisService（モック）"]
-    L -->|ArticleAnalysis| I
+    I -->|"getArticleAnalysisService()"| AAF["articleAnalysisFactory.ts"]
+    AAF -->|"LLM_PROVIDER=mock"| AAM["articleAnalysis.mock.ts"]
+    AAF -->|"LLM_PROVIDER=vertex"| AAV["articleAnalysis.vertex.ts<br/>prompt生成→LlmProvider→JSON parse→schema検証<br/>（失敗時1回だけ再試行）"]
+    AAV -->|"getLlmProvider()"| PF2["llm/provider/llmProviderFactory.ts"]
+    PF2 -->|"generateText(responseJsonSchema付き)"| VP2["vertexGeminiProvider.ts"]
+    VP2 -->|"generateContent()"| VX2[("Vertex AI<br/>Gemini")]
+    AAM -->|ArticleAnalysis| I
+    AAV -->|ArticleAnalysis| I
     I --> H
 
     B --> M["POST /api/deep-dive"]
@@ -106,7 +116,7 @@ flowchart TD
 - **`network.ts`**: `assertPublicHost(url)` がSSRF対策を担当。ホスト名が`localhost`/`*.localhost`、またはIPリテラルでプライベート/ループバック/リンクローカル（`169.254.169.254`等のクラウドメタデータエンドポイントを含む）なら`ArticleFetchError`（`400`）。ホスト名の場合はDNS解決した実IPも同様にチェックし、DNSリバインディングを防ぐ。
 - **`robots.ts`**: `ensureAllowedByRobots(url, userAgent)` がrobots.txtを取得・パースし、Diggerの User-Agent（`digger`）または`*`グループのルールと照合。`Disallow`に一致すれば`ArticleFetchError`（`403`）。robots.txt自体が取得できない（ネットワークエラー・非2xxなど）場合は許可されているものとして扱う。簡易パーサのため`Allow`/`Disallow`のみサポートし、`Crawl-delay`等は無視する。
 - **`errors.ts`**: `ArticleFetchError`（`400`/`403`/`422`/`502`のいずれかのステータスを持つ）。記事取得パイプライン全体（URL検証・SSRF対策・robots確認・HTTP取得・本文抽出）で共通に使うエラー型。
-- **`dig.ts`**: `parseArticleUrl()` がリクエストの `url` を検証（未指定・不正な形式・http/https以外のプロトコルはエラー）。`buildDigResult()` が `fetchArticle()` で取得した実際の `title`/`textContent` を `llm/articleAnalysis.mock.ts` の `ArticleAnalysisService` に渡し、その結果と組み合わせて `DigResult` を返します。
+- **`dig.ts`**: `parseArticleUrl()` がリクエストの `url` を検証（未指定・不正な形式・http/https以外のプロトコルはエラー）。`buildDigResult()` が `fetchArticle()` で取得した実際の `title`/`textContent` を `llm/articleAnalysisFactory.ts` の `getArticleAnalysisService()`（`LLM_PROVIDER`に応じてmock/vertexを切り替え）に渡し、その結果と組み合わせて `DigResult` を返します。`LlmProviderError`は`index.ts`側で捕捉し、`toSafeApiResponse()`で安全なレスポンスに変換します。
 - **`deepDive.ts`**: `parseDeepDiveInput()` がリクエストボディを `llm/deepDive.ts` の `deepDiveInputSchema` でそのまま検証（`articleAnalysis`/`question`/`conversationHistory`/`userKnowledge?`の形が正しいか）。`buildDeepDiveResponse()` が `llm/deepDive.mock.ts` の `DeepDiveService` を呼び出すだけの薄いラッパーです。
 - **`types.ts`**: `/api/dig` のリクエスト型（`DigRequest`）とレスポンス型（`DigResult` / `DigSource`、および `llm/articleAnalysis.ts` の `ArticleAnalysis`）を定義。frontend側の `src/types.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。`/api/deep-dive` は `llm/deepDive.ts` の型をそのままリクエスト/レスポンス型として使うため、`types.ts` に重複定義はありません。
 - **`llm/`**: LLMを使う4処理（後述）の型・schema・interface・モック実装、および`llm/provider/`（Vertex AI等のプロバイダー抽象化層。後述）。
@@ -120,13 +130,16 @@ flowchart TD
 
 ## LLM処理（Article Analysis / Personalized Analysis / Knowledge Extraction / Deep Dive）
 
-Diggerのコア機能である「記事を深掘りして理解を蓄積する」部分は、4つの独立したLLM処理として実装します。**Article AnalysisとDeep Diveは外部LLM APIを呼ばず、`llm/*.mock.ts` の固定サンプルデータ（日銀の利上げに関するデモ）を返すだけです。** 型・zod schema・interfaceは本物のLLM実装に差し替えられる形で先に用意しています。
+Diggerのコア機能である「記事を深掘りして理解を蓄積する」部分は、4つの独立したLLM処理として実装します。**Article Analysisは実LLM化済みで、`LLM_PROVIDER=vertex`のときVertex AI Geminiが実際に記事内容を解析します。** Deep Dive・Personalized Analysis・Knowledge Extractionはまだ`llm/*.mock.ts`の固定/簡易ロジックのみです。
 
 ```mermaid
 flowchart LR
-    subgraph "1. Article Analysis（実装済み・/api/digから呼ばれる）"
-        AAI["ArticleAnalysisInput<br/>title / url / content"] --> AAS["ArticleAnalysisService<br/>(articleAnalysis.mock.ts)"]
+    subgraph "1. Article Analysis（実LLM化済み・/api/digから呼ばれる）"
+        AAI["ArticleAnalysisInput<br/>title / url / content"] --> AAF2["articleAnalysisFactory.ts"]
+        AAF2 -->|mock| AAS["articleAnalysis.mock.ts"]
+        AAF2 -->|vertex| AAV2["articleAnalysis.vertex.ts<br/>(Gemini + structured output +<br/>schema検証 + 1回だけ再試行)"]
         AAS --> AA["ArticleAnalysis<br/>summary / whyItMatters / concepts /<br/>entities / connections / deepDiveQuestions"]
+        AAV2 --> AA
     end
 
     subgraph "2. Personalized Analysis（型・モックのみ、未接続）"
@@ -155,27 +168,49 @@ flowchart LR
 - **runtime validation**: 型定義には[Zod](https://zod.dev/)を使い、`z.infer<typeof schema>` でTypeScript型をschemaから導出しています（型とバリデーションルールの二重管理を避けるため）。モック実装も生成したデータを`schema.parse(...)`に通してから返しており、本物のLLM実装でも「LLMのレスポンス(JSON)を`schema.parse(...)`で検証してから返す」という同じパターンを踏襲する想定です。LLMの出力は外部から来る信頼できないデータなので、ここでの検証は将来的に特に重要になります。`deepDive.ts`の`deepDiveInputSchema`はさらに、クライアントからのリクエストボディの検証にもそのまま使われています（`deepDive.ts`（backend直下）の`parseDeepDiveInput()`）。
 - **共通型の再利用**: 会話ターンの型（`{ role: "user" | "assistant", content: string }`）は`llm/conversation.ts`に切り出し、Knowledge ExtractionとDeep Diveの両方から利用しています。ユーザーの過去の知識の型（`UserKnowledge`）は`llm/personalizedAnalysis.ts`からexportし、Deep Diveから再利用しています。
 - **ユーザー知識・履歴の扱い**: Article Analysisにはユーザーの知識や履歴を一切渡しません（記事そのものの客観的な解析のため）。ユーザー個人への最適化はPersonalized Analysisの責務として分離しています。
-- **1. Article Analysis**（`llm/articleAnalysis.ts` / `articleAnalysis.mock.ts`）: 記事の`title`/`url`/`content`から、要約・重要性・前提知識（`concepts`）・関連する人物や組織（`entities`）・他テーマとの関連（`connections`）・深掘りの問い（`deepDiveQuestions`）を生成。`dig.ts`から呼ばれ、`/api/dig`のレスポンスに含まれます。
+- **1. Article Analysis**（`llm/articleAnalysis.ts` / `articleAnalysis.mock.ts` / `articleAnalysis.vertex.ts` / `articleAnalysisFactory.ts`）: 記事の`title`/`url`/`content`から、要約・重要性・前提知識（`concepts`）・関連する人物や組織（`entities`）・他テーマとの関連（`connections`）・深掘りの問い（`deepDiveQuestions`）を生成。`dig.ts`が`articleAnalysisFactory.ts`の`getArticleAnalysisService()`（`LLM_PROVIDER`で`articleAnalysis.mock.ts`/`articleAnalysis.vertex.ts`を切り替え）を呼び、結果は`/api/dig`のレスポンスに含まれます。実LLM実装の詳細は次項を参照。
 - **2. Personalized Analysis**（`llm/personalizedAnalysis.ts` / `personalizedAnalysis.mock.ts`）: Article Analysisの結果とユーザーの過去の理解（`userKnowledge`）を照合し、「何を説明すべきか」を判定。モック実装はLLMを使わず、concept名の文字列一致だけで「既知/未知」を振り分ける簡易ロジックです。**まだどのルートからも呼ばれていません**（ユーザーの理解履歴を保存する仕組み自体が未実装のため）。
 - **3. Knowledge Extraction**（`llm/knowledgeExtraction.ts` / `knowledgeExtraction.mock.ts`）: 深掘り対話のログ（`conversation`）から、新しく理解したと思われる知識の"候補"（`KnowledgeCandidate`）を抽出。AIが理解を勝手に確定させないよう、あくまで候補を返すだけで、保存の可否はユーザーが決める設計です。**まだどのルートからも呼ばれていません**（今回`/api/deep-dive`は実装しましたが、そこでの対話ログをKnowledge Extractionに渡す導線はまだ未実装です）。
 - **4. Deep Dive**（`llm/deepDive.ts` / `deepDive.mock.ts`）: Article Analysisの結果・質問（`question`）・これまでの会話（`conversationHistory`）から、その場の回答（`answer`）・関連する前提知識（`relatedConcepts`）・次の質問候補（`suggestedFollowUps`）を生成。`backend/src/deepDive.ts`から呼ばれ、`POST /api/deep-dive`のレスポンスになります。モック実装は、`relatedConcepts`をArticle Analysisの`concepts`から、`suggestedFollowUps`を`deepDiveQuestions`（今回の質問を除く）から実際に組み立てており、`answer`のみ固定文言です。
 
-> **注記**: 上記4処理（`ArticleAnalysisService`等）自体はまだ`llm/provider/`（次項）を使っておらず、それぞれの`*.mock.ts`が固定値を返すだけです。これらを実LLM化する際は、各処理の実装（例: `articleAnalysis.gemini.ts`）が内部で`llm/provider/`の`LlmProvider`を呼び、返ってきたテキストを対応するzod schemaで検証してから構造化データとして返す、という形になる想定です。
+> **注記**: Personalized Analysis・Knowledge Extraction・Deep Diveはまだ`llm/provider/`（次項）を使っておらず、それぞれの`*.mock.ts`が固定値/簡易ロジックを返すだけです。Article Analysisは実際に`llm/provider/`経由でVertex AI Geminiを呼ぶ実装（`articleAnalysis.vertex.ts`）を追加済みなので、他の処理を実LLM化する際の実例として参照してください。
+
+### Article Analysisの実LLM化（`articleAnalysis.vertex.ts`）
+
+`LLM_PROVIDER=vertex`のとき、`articleAnalysisFactory.ts`が`vertexArticleAnalysisService`を選択します。処理の流れ:
+
+1. **入力サイズの制御**: 記事本文（`content`）が`MAX_CONTENT_LENGTH`（12,000文字）を超える場合は切り詰め、末尾に省略した旨を追記します。トークン数ではなく文字数での単純な制御です（Gemini 2.5 Flash等のコンテキストウィンドウ自体は十分大きいですが、コスト・レイテンシを抑えるための保守的な上限です）。
+2. **prompt生成**: システムプロンプトでDiggerのArticle Analysisエンジンとしての役割（何が起きたか／なぜ重要か／前提知識／関連テーマ／深掘りの問いを整理する。単なる要約ではない）を指示し、ユーザープロンプトで記事のtitle/url/本文と、各フィールド（`summary`/`whyItMatters`/`concepts`/`entities`/`connections`/`deepDiveQuestions`）ごとの具体的な出力ルール（良い例/悪い例を含む）を渡します。
+3. **structured output**: `articleAnalysisSchema`を[Zod 4の`z.toJSONSchema()`](https://zod.dev/json-schema)（追加ライブラリ不要）でJSON Schemaに変換し、`LlmProvider.generateText()`の`responseJsonSchema`として渡します。`vertexGeminiProvider.ts`はこれを`responseMimeType: "application/json"` + `responseJsonSchema`として`@google/genai`の`generateContent()`に渡し、Geminiのnative構造化出力機能でJSON形式の出力を強制します。
+4. **runtime validation**: 返ってきたテキストを`JSON.parse()`し（万一markdownのコードフェンスで囲まれていても対応）、`articleAnalysisSchema.safeParse()`で検証します。**LLMが返した値は無条件に信用しません。**
+5. **再試行**: JSON parse失敗・schema validation失敗（必須フィールド欠落・不正なenum値・空レスポンス等）の場合、「前回の出力がschemaに適合しなかったため、指定schemaに厳密に従って再生成してください」という指示を追加して**1回だけ**再試行します。それでも失敗すれば`LlmProviderError`（`empty_response`）を投げ、`index.ts`が`502`として返します。複雑な自動修復は行いません。
+6. **ログ**: `[ArticleAnalysis] start`（provider/model/url）→（失敗時）`[ArticleAnalysis] validation failed, retrying once`→`[ArticleAnalysis] success`または`failed after retry`（provider/model/処理時間ms/retriedの有無）をサーバーログに出力します。記事本文全文やcredentialは出力しません。トークン使用量（`promptTokens`/`candidatesTokens`/`totalTokens`）は`vertexGeminiProvider.ts`側で`[VertexGeminiProvider] token usage`として出力します（`@google/genai`のレスポンスに含まれる`usageMetadata`をそのまま使うだけで、追加の実装は行っていません）。
+7. **timeout**: `llm/provider/vertexGeminiProvider.ts`が持つ既存の30秒タイムアウト（`AbortController`）をそのまま利用します。再試行時も同じタイムアウトが個別に適用されるため、最悪ケースでも無限待ちにはなりません（1回の呼び出しごとに最大30秒、再試行込みで最大2回）。
+8. **テスト容易性**: `createVertexArticleAnalysisService(getProvider)`という形でproviderの解決を関数として注入できるようにしており、テストではフェイクの`LlmProvider`を渡すことで、実際のVertex AI呼び出しなしに正常系・JSON parse失敗・schema validation失敗・再試行成功・再試行後も失敗・LLM呼び出しエラー（再試行しないこと）を検証しています（`articleAnalysis.vertex.test.ts`）。
 
 ## LLMプロバイダー層（`llm/provider/`）
 
-Article Analysis等の各LLM処理が「どのAIベンダーを使うか」を意識しないで済むよう、生成AI呼び出しそのものを抽象化する薄いレイヤーです。今回のタスクでは、この層を新設して**Vertex AI (Gemini) への最小限の疎通確認**を行うところまでを実装しました（Article Analysis等の実LLM化はまだ行っていません）。
+Article Analysis等の各LLM処理が「どのAIベンダーを使うか」を意識しないで済むよう、生成AI呼び出しそのものを抽象化する薄いレイヤーです。Article Analysisが最初にこの層を実際に使う処理になりました。
 
 ```ts
 // llm/provider/llmProvider.ts
+export type GenerateTextInput = {
+  systemPrompt?: string;
+  prompt: string;
+  // 構造化出力(JSON)を要求する場合の標準JSON Schema。対応していないproviderは無視してよい。
+  responseJsonSchema?: Record<string, unknown>;
+};
+
 export interface LlmProvider {
-  generateText(input: { systemPrompt?: string; prompt: string }): Promise<string>;
+  generateText(input: GenerateTextInput): Promise<string>;
 }
 ```
 
 - **`llmProvider.ts`**: 上記の`LlmProvider` interfaceのみを定義。`ArticleAnalysisService`等の既存interfaceとは別レイヤー（既存interfaceは「記事を解析して構造化データを返す」というDigger固有の処理、`LlmProvider`は「テキストを1回生成する」という汎用的な処理）なので、新設しても既存interfaceの乱立にはあたりません。
 - **`mockLlmProvider.ts`**: `MockLlmProvider`。受け取った`prompt`を埋め込んだ固定文言を返すだけで、外部通信は一切行いません。
 - **`vertexGeminiProvider.ts`**: `VertexGeminiProvider`。[`@google/genai`](https://www.npmjs.com/package/@google/genai)（Googleの統一Gen AI SDK。Vertex AIとGemini Developer APIの両方に対応し、旧来の`@google-cloud/vertexai`はGemini 2.0以降の新機能を受け取らないため今回は不採用）を使い、`GCP_PROJECT_ID`/`GCP_LOCATION`/`GEMINI_MODEL`（すべて環境変数、コードにモデル名はハードコードしない）でVertex AI上のGeminiを呼び出します。認証は明示的なAPIキーではなくApplication Default Credentials（ADC）任せにしています（後述）。タイムアウトは`AbortController`で30秒に設定（`REQUEST_TIMEOUT_MS`）。
+  - `responseJsonSchema`が渡された場合は`responseMimeType: "application/json"`と合わせて`generateContent()`のconfigに設定し、Geminiのnative構造化出力機能を使う。未指定の場合は通常のテキスト応答（`/api/llm/test`はこちらの経路）。
+  - レスポンスの`usageMetadata`（`promptTokenCount`/`candidatesTokenCount`/`totalTokenCount`）を`console.log`でそのまま出力するだけの軽量なトークン使用量ロギングを行う（本文全文やcredentialは出力しない）。
   - `classifyVertexError()`という純粋関数でエラーを分類しています（ネットワークを使わないので単体テスト可能）: `AbortError`→`timeout`、HTTP `401`/`403`→`auth_failed`、HTTP `404`→`invalid_model`、ADC関連のエラーメッセージ→`auth_failed`、それ以外→`api_error`。呼び出し自体は成功したがテキストが空の場合は`empty_response`。
 - **`llmProviderError.ts`**: `LlmProviderError`（`config_missing`/`auth_failed`/`invalid_model`/`timeout`/`api_error`/`empty_response`のいずれかの`code`を持つ）と、それを安全なHTTPレスポンス（ステータスコード＋汎用メッセージ）に変換する`toSafeApiResponse()`。**ユーザー向けレスポンスには元のエラーメッセージ（credentialや内部情報を含み得る）を含めず**、詳細はサーバーログにのみ出力します（`index.ts`の`console.error`）。
 - **`llmProviderFactory.ts`**: `getLlmProvider()`が環境変数`LLM_PROVIDER`（`mock` | `vertex`、デフォルト`mock`）を見て、対応する`LlmProvider`実装を返すだけの単純なswitch文です。DIコンテナ等は導入していません。
@@ -285,7 +320,7 @@ services:
 - `jsdom` — 取得したHTMLをパースしてDOMを構築するライブラリ（Node.js上でDOM APIを再現）
 - `@mozilla/readability` — `jsdom`で構築したDOMから記事本文・タイトルを抽出するライブラリ（Firefoxリーダービューと同じエンジン）
 - `@google/genai` — Google Cloudの統一Gen AI SDK。Vertex AI上のGeminiを`llm/provider/vertexGeminiProvider.ts`から呼び出すために使用（採用理由は[LLMプロバイダー層](#llmプロバイダー層llmprovider)を参照）
-- `zod` — LLM入出力の型定義とruntime validationに使用（`llm/`配下）。テストは追加ライブラリなしでNode.js標準の`node:test`を使用
+- `zod` — LLM入出力の型定義とruntime validationに使用（`llm/`配下）。Zod 4の`z.toJSONSchema()`（追加ライブラリ不要）で`articleAnalysisSchema`をJSON Schemaに変換し、Geminiのstructured output機能にそのまま渡している。テストは追加ライブラリなしでNode.js標準の`node:test`を使用
 - `tsx` — TypeScriptをトランスパイルなしで直接実行する開発用ランナー（ウォッチモード対応）
 
 `jsdom` はNode.js 22系を要求するため、ローカルで直接実行する場合もNode 22系が必要です（[ローカル起動](#ローカル起動)参照）。
@@ -321,9 +356,9 @@ curl -X POST http://localhost:8787/api/llm/test \
 
 ## 今後の拡張ポイント（未実装）
 
-- `llm/articleAnalysis.mock.ts`・`llm/deepDive.mock.ts` を、`llm/provider/`の`LlmProvider`（Vertex AI Gemini）を使う実装に差し替える（各`XxxService`インターフェースは変えずに済む想定。詳細は本READMEの[LLM処理](#llm処理article-analysis--personalized-analysis--knowledge-extraction--deep-dive)節の注記を参照）
-- `POST /api/llm/test`は開発用の疎通確認APIのため、Article Analysis等への接続が進んだら削除する
-- structured output（JSON Schema等でLLMに構造化データを直接生成させる方式）の導入。現状は生テキストのみで、構造化データへの変換はzod schemaでの後段検証に頼っている
+- `llm/deepDive.mock.ts` を、Article Analysis（`articleAnalysis.vertex.ts`）と同じパターンで実LLM化する（`deepDive.vertex.ts`を追加し、`articleAnalysisFactory.ts`と同様のfactoryを`deepDive.ts`（backend直下）に組み込む）
+- `POST /api/llm/test`は開発用の疎通確認APIのため、他の処理の実LLM化が進んだら削除を検討する
+- 記事本文の切り詰め（`MAX_CONTENT_LENGTH`、現状12,000文字の単純な文字数カット）を、文の区切りを考慮した切り詰めや要約前処理に改善する
 - `POST /api/deep-dive`の対話ログをKnowledge Extractionに渡す導線（「理解したことを抽出・保存」の仕組み）
 - Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提）
 - JavaScriptレンダリングが必要なサイトへの対応（ヘッドレスブラウザの導入）
