@@ -11,6 +11,10 @@ backend/
 │   ├── db.ts                        # MongoDB接続クライアントの生成・pingヘルパー
 │   ├── dig.ts                         # /api/dig のURLバリデーションと解析結果の組み立て
 │   ├── deepDive.ts                     # /api/deep-dive のリクエスト検証と回答の組み立て
+│   ├── knowledgeApi.ts                   # /api/knowledge/extract・/api/knowledge/save・/api/knowledge のリクエスト検証と組み立て
+│   ├── knowledge.ts                       # Knowledge（保存済みの理解）のMongoDB永続化と重複判定
+│   ├── knowledge.test.ts                   # knowledge.ts のユニットテスト（正規化ロジックのみ、Mongo未使用）
+│   ├── knowledgeApi.test.ts                 # knowledgeApi.ts のユニットテスト（リクエスト検証・confidenceフィルタ、Mongo未使用）
 │   ├── llmTest.ts                       # /api/llm/test（開発用のLLM疎通確認API）のロジック
 │   ├── articleFetcher.ts                 # 記事HTMLの取得（リダイレクト追跡）とReadabilityによる本文/タイトル抽出
 │   ├── network.ts                         # SSRF対策（private/loopback/link-localホストの拒否）
@@ -34,6 +38,9 @@ backend/
 │       ├── personalizedAnalysis.mock.test.ts               # モック実装のユニットテスト
 │       ├── knowledgeExtraction.ts                            # 型・zod schema・KnowledgeExtractionService interface
 │       ├── knowledgeExtraction.mock.ts                         # モック実装（固定の候補を1件返す）
+│       ├── knowledgeExtraction.vertex.ts                        # 実LLM実装（Gemini呼び出し＋prompt生成＋schema検証＋1回だけ再試行、idはサーバー側で付与）
+│       ├── knowledgeExtraction.vertex.test.ts                    # 上記のユニットテスト（フェイクのLlmProviderを使用、ネットワーク未使用）
+│       ├── knowledgeExtractionFactory.ts                          # LLM_PROVIDER環境変数によるKnowledgeExtractionService切り替え
 │       ├── deepDive.ts                                           # 型・zod schema・DeepDiveService interface
 │       ├── deepDive.mock.ts                                       # モック実装（記事の解析結果から応答を組み立てる）
 │       ├── deepDive.mock.test.ts                                   # モック実装のユニットテスト
@@ -121,16 +128,19 @@ flowchart TD
 - **`types.ts`**: `/api/dig` のリクエスト型（`DigRequest`）とレスポンス型（`DigResult` / `DigSource`、および `llm/articleAnalysis.ts` の `ArticleAnalysis`）を定義。frontend側の `src/types.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。`/api/deep-dive` は `llm/deepDive.ts` の型をそのままリクエスト/レスポンス型として使うため、`types.ts` に重複定義はありません。
 - **`llm/`**: LLMを使う4処理（後述）の型・schema・interface・モック実装、および`llm/provider/`（Vertex AI等のプロバイダー抽象化層。後述）。
 - **`llmTest.ts`**: 開発用の疎通確認API `POST /api/llm/test` のロジック。リクエストの`message`をzodで検証し、`llm/provider/`の`getLlmProvider()`が返す`LlmProvider`（デフォルトはモック）の`generateText()`を、固定のsystem promptと一緒に呼ぶだけです。Diggerの業務ロジック（Article Analysis等）はまだ関与しません。
-- 現時点でルートは5つ:
+- 現時点でルートは8つ:
   - `GET /api/health` — プロセスが生きていることの確認（DBには触れない）
   - `GET /api/health/db` — `pingDatabase()` を呼び、成功なら `200 { status: "ok", db: "connected" }`、失敗なら `503 { status: "error", db: "disconnected", message }`
   - `POST /api/dig` — `{ url: string }` を受け取り、URLバリデーション失敗またはSSRF対象ホストは `400`、robots.txtにより不許可なら `403`、記事取得・抽出・Article Analysisに成功すれば `200` で `DigResult`、それ以外の取得・抽出失敗は `422`（本文抽出失敗・非HTML）または `502`（アクセス失敗・非2xx・ホスト名解決失敗）で `{ error: string }`
   - `POST /api/deep-dive` — `{ articleAnalysis, question, conversationHistory, userKnowledge? }` を受け取り、schemaバリデーション失敗は `400`、成功すれば `200` で `DeepDiveResponse`（`answer`/`relatedConcepts`/`suggestedFollowUps`）、それ以外の失敗は `502` で `{ error: string }`
+  - `POST /api/knowledge/extract` — `{ source, articleAnalysis, conversationHistory }` を受け取り、schemaバリデーション失敗は `400`。保存済みKnowledge（あれば）を`existingKnowledge`としてLLMへ渡した上でKnowledge Extractionを実行し、`200` で `{ candidates: KnowledgeCandidate[] }`（`confidence: "low"`の候補はUXをシンプルに保つため事前に除外）。LLMプロバイダー側のエラーは原因に応じて`500`/`502`/`504`、それ以外の失敗は`502`で`{ error: string }`
+  - `POST /api/knowledge/save` — `{ source, candidates: KnowledgeCandidate[] }`（ユーザーがチェックボックスで選んだ候補のみ）を受け取り、schemaバリデーション失敗は`400`。既存Knowledgeと（concept完全一致 + statement正規化後一致で）重複するものは保存せずスキップし、`200`で`{ savedCount: number, skippedCount: number }`、それ以外の失敗は`502`で`{ error: string }`
+  - `GET /api/knowledge` — 保存済みKnowledge（固定userId分）を`createdAt`降順で`200`の`{ knowledge: KnowledgeDocument[] }`として返す。取得失敗時は`502`で`{ error: string }`
   - `POST /api/llm/test` — 開発用のLLM疎通確認API（後述）。`{ message: string }` を受け取り、バリデーション失敗は `400`、成功すれば `200` で `{ response: string }`、LLMプロバイダー側のエラーは原因に応じて `500`/`502`/`504` で `{ error: string }`（安全な汎用メッセージのみ。詳細はサーバーログへ）
 
 ## LLM処理（Article Analysis / Personalized Analysis / Knowledge Extraction / Deep Dive）
 
-Diggerのコア機能である「記事を深掘りして理解を蓄積する」部分は、4つの独立したLLM処理として実装します。**Article Analysisは実LLM化済みで、`LLM_PROVIDER=vertex`のときVertex AI Geminiが実際に記事内容を解析します。** Deep Dive・Personalized Analysis・Knowledge Extractionはまだ`llm/*.mock.ts`の固定/簡易ロジックのみです。
+Diggerのコア機能である「記事を深掘りして理解を蓄積する」部分は、4つの独立したLLM処理として実装します。**Article AnalysisとKnowledge Extractionは実LLM化済みで、`LLM_PROVIDER=vertex`のときVertex AI Geminiが実際に処理します。** Deep Dive・Personalized Analysisはまだ`llm/*.mock.ts`の固定/簡易ロジックのみです。
 
 ```mermaid
 flowchart LR
@@ -147,9 +157,12 @@ flowchart LR
         PAS --> PA["PersonalizedAnalysis<br/>alreadyKnown / needsExplanation /<br/>relatedPastKnowledge / personalizedExplanation / suggestedQuestions"]
     end
 
-    subgraph "3. Knowledge Extraction（型・モックのみ、未接続）"
-        KEI["KnowledgeExtractionInput<br/>articleAnalysis + conversation"] --> KES["KnowledgeExtractionService<br/>(knowledgeExtraction.mock.ts)"]
-        KES --> KE["KnowledgeCandidate[]<br/>concept / statement / evidence /<br/>confidence / isNew"]
+    subgraph "3. Knowledge Extraction（実LLM化済み・/api/knowledge/extractから呼ばれる）"
+        KEI["KnowledgeExtractionInput<br/>source + articleAnalysis + conversation<br/>+ existingKnowledge?"] --> KEF["knowledgeExtractionFactory.ts"]
+        KEF -->|mock| KES["knowledgeExtraction.mock.ts"]
+        KEF -->|vertex| KEV["knowledgeExtraction.vertex.ts<br/>(Gemini + structured output +<br/>schema検証 + 1回だけ再試行 +<br/>idをサーバー側で付与)"]
+        KES --> KE["KnowledgeExtractionResult<br/>candidates: { id / concept / statement /<br/>evidence / confidence / isNew }[]"]
+        KEV --> KE
     end
 
     subgraph "4. Deep Dive（実装済み・/api/deep-diveから呼ばれる）"
@@ -158,9 +171,11 @@ flowchart LR
     end
 
     AA -.->|将来: userKnowledgeと合わせて入力| PAI
-    AA -.->|将来: 深掘り対話ログと合わせて入力| KEI
+    AA -->|「今回わかったことを残す」クリック時に<br/>会話ログと合わせて渡す| KEI
     AA -->|質問のたびに渡す| DDI
     DDO -.->|会話ログとしてconversationHistoryに蓄積| DDI
+    KE -.->|ユーザーが確認・選択| SAVE["POST /api/knowledge/save<br/>選択されたcandidateのみ保存"]
+    SAVE --> MONGO[("MongoDB<br/>user_knowledge collection")]
 ```
 
 - **なぜ4つに分離するか**: それぞれ目的も入力も異なるため（記事の客観的な解析／ユーザー個人への最適化／対話からの知識抽出／その場のQ&A）。将来的に別々のプロンプト・別々のモデル（例: 安価なモデルで要約、高性能なモデルで個人化）に切り替えられるよう、最初から独立した`interface`にしています。候補ボタンのクリックと自由入力のどちらから来た質問も、同じ`question: string`として`DeepDiveService`に渡るため、呼び出し側で区別する必要がありません。
@@ -170,10 +185,10 @@ flowchart LR
 - **ユーザー知識・履歴の扱い**: Article Analysisにはユーザーの知識や履歴を一切渡しません（記事そのものの客観的な解析のため）。ユーザー個人への最適化はPersonalized Analysisの責務として分離しています。
 - **1. Article Analysis**（`llm/articleAnalysis.ts` / `articleAnalysis.mock.ts` / `articleAnalysis.vertex.ts` / `articleAnalysisFactory.ts`）: 記事の`title`/`url`/`content`から、要約・重要性・前提知識（`concepts`）・関連する人物や組織（`entities`）・他テーマとの関連（`connections`）・深掘りの問い（`deepDiveQuestions`）を生成。`dig.ts`が`articleAnalysisFactory.ts`の`getArticleAnalysisService()`（`LLM_PROVIDER`で`articleAnalysis.mock.ts`/`articleAnalysis.vertex.ts`を切り替え）を呼び、結果は`/api/dig`のレスポンスに含まれます。実LLM実装の詳細は次項を参照。
 - **2. Personalized Analysis**（`llm/personalizedAnalysis.ts` / `personalizedAnalysis.mock.ts`）: Article Analysisの結果とユーザーの過去の理解（`userKnowledge`）を照合し、「何を説明すべきか」を判定。モック実装はLLMを使わず、concept名の文字列一致だけで「既知/未知」を振り分ける簡易ロジックです。**まだどのルートからも呼ばれていません**（ユーザーの理解履歴を保存する仕組み自体が未実装のため）。
-- **3. Knowledge Extraction**（`llm/knowledgeExtraction.ts` / `knowledgeExtraction.mock.ts`）: 深掘り対話のログ（`conversation`）から、新しく理解したと思われる知識の"候補"（`KnowledgeCandidate`）を抽出。AIが理解を勝手に確定させないよう、あくまで候補を返すだけで、保存の可否はユーザーが決める設計です。**まだどのルートからも呼ばれていません**（今回`/api/deep-dive`は実装しましたが、そこでの対話ログをKnowledge Extractionに渡す導線はまだ未実装です）。
+- **3. Knowledge Extraction**（`llm/knowledgeExtraction.ts` / `knowledgeExtraction.mock.ts` / `knowledgeExtraction.vertex.ts` / `knowledgeExtractionFactory.ts`）: 深掘り対話のログ（`conversation`）から、新しく理解したと思われる知識の"候補"（`KnowledgeCandidate`）を抽出。AIが理解を勝手に確定させないよう、あくまで候補を返すだけで、保存の可否はユーザーが決める設計です。`knowledgeApi.ts`（backend直下）が`knowledgeExtractionFactory.ts`の`getKnowledgeExtractionService()`を呼び、`POST /api/knowledge/extract`から利用されます。実LLM実装の詳細は次項を参照。
 - **4. Deep Dive**（`llm/deepDive.ts` / `deepDive.mock.ts`）: Article Analysisの結果・質問（`question`）・これまでの会話（`conversationHistory`）から、その場の回答（`answer`）・関連する前提知識（`relatedConcepts`）・次の質問候補（`suggestedFollowUps`）を生成。`backend/src/deepDive.ts`から呼ばれ、`POST /api/deep-dive`のレスポンスになります。モック実装は、`relatedConcepts`をArticle Analysisの`concepts`から、`suggestedFollowUps`を`deepDiveQuestions`（今回の質問を除く）から実際に組み立てており、`answer`のみ固定文言です。
 
-> **注記**: Personalized Analysis・Knowledge Extraction・Deep Diveはまだ`llm/provider/`（次項）を使っておらず、それぞれの`*.mock.ts`が固定値/簡易ロジックを返すだけです。Article Analysisは実際に`llm/provider/`経由でVertex AI Geminiを呼ぶ実装（`articleAnalysis.vertex.ts`）を追加済みなので、他の処理を実LLM化する際の実例として参照してください。
+> **注記**: Personalized Analysis・Deep Diveはまだ`llm/provider/`（次項）を使っておらず、それぞれの`*.mock.ts`が固定値/簡易ロジックを返すだけです。Article AnalysisとKnowledge Extractionは実際に`llm/provider/`経由でVertex AI Geminiを呼ぶ実装（`articleAnalysis.vertex.ts` / `knowledgeExtraction.vertex.ts`）を追加済みなので、他の処理を実LLM化する際の実例として参照してください。
 
 ### Article Analysisの実LLM化（`articleAnalysis.vertex.ts`）
 
@@ -187,6 +202,26 @@ flowchart LR
 6. **ログ**: `[ArticleAnalysis] start`（provider/model/url）→（失敗時）`[ArticleAnalysis] validation failed, retrying once`→`[ArticleAnalysis] success`または`failed after retry`（provider/model/処理時間ms/retriedの有無）をサーバーログに出力します。記事本文全文やcredentialは出力しません。トークン使用量（`promptTokens`/`candidatesTokens`/`totalTokens`）は`vertexGeminiProvider.ts`側で`[VertexGeminiProvider] token usage`として出力します（`@google/genai`のレスポンスに含まれる`usageMetadata`をそのまま使うだけで、追加の実装は行っていません）。
 7. **timeout**: `llm/provider/vertexGeminiProvider.ts`が持つ既存の30秒タイムアウト（`AbortController`）をそのまま利用します。再試行時も同じタイムアウトが個別に適用されるため、最悪ケースでも無限待ちにはなりません（1回の呼び出しごとに最大30秒、再試行込みで最大2回）。
 8. **テスト容易性**: `createVertexArticleAnalysisService(getProvider)`という形でproviderの解決を関数として注入できるようにしており、テストではフェイクの`LlmProvider`を渡すことで、実際のVertex AI呼び出しなしに正常系・JSON parse失敗・schema validation失敗・再試行成功・再試行後も失敗・LLM呼び出しエラー（再試行しないこと）を検証しています（`articleAnalysis.vertex.test.ts`）。
+
+### Knowledge Extractionの実LLM化（`knowledgeExtraction.vertex.ts`）
+
+Article Analysisと同じ構造・パターンを踏襲しています。差分のみ記載します。
+
+1. **入力**: `KnowledgeExtractionInput`は`source`（記事のtype/url/title）・`articleAnalysis`・`conversation`（深掘り対話ログ）・`existingKnowledge?`（保存済みKnowledge。`knowledgeApi.ts`がMongoDBから取得して渡す。取得に失敗しても抽出自体は続行し、空配列で進めます）の4つ。会話が長くなりすぎた場合は直近`MAX_CONVERSATION_TURNS`（30件）だけに切り詰めます（Article Analysisの`MAX_CONTENT_LENGTH`と同じ考え方）。
+2. **prompt生成**: システムプロンプトで「AIが理解を勝手に確定してはいけない、あくまで候補」「記事本文に書いてあるだけの内容や、ユーザーが質問しただけの内容は理解済み扱いしない」「ユーザーの言い換え・確認・関連づけを理解の根拠として重視する」という制約を明示。ユーザープロンプトには記事のtitle/url/summary/前提知識、会話ログ、そして**既存Knowledgeの一覧**（`isNew`をfalseにすべきかどうかの判断材料）を渡します。
+3. **idの扱い**: `KnowledgeCandidate`の`id`はLLMには生成させません（一意性をLLMの出力に依存させないため）。LLMには`concept`/`statement`/`evidence`/`confidence`/`isNew`だけを含む"draft" schema（`knowledgeExtractionDraftSchema`）で構造化出力させ、schema検証に成功した後で`randomUUID()`により`id`をサーバー側で付与します（`withGeneratedIds()`）。
+4. **structured output / 検証 / 再試行 / ログ / timeout**: Article Analysisと全く同じパターン（`z.toJSONSchema()`でJSON Schema化、`safeParse`で検証、1回だけ再試行、`[KnowledgeExtraction] ...`のログ、既存の30秒タイムアウトをそのまま利用）。
+5. **confidenceのフィルタリングはこの層では行いません**: `knowledgeExtraction.vertex.ts`はLLMが判定した`confidence`（`low`/`medium`/`high`）をそのまま返します。「確認UIには`low`を出さない」というUX判断は、呼び出し側の`knowledgeApi.ts`（`filterForConfirmationUi()`）で行っています（MVPとしてシンプルにするための判断で、必要なら将来的にUI側の設定に変更できます）。
+6. **テスト容易性**: Article Analysisと同じくフェイクの`LlmProvider`を注入して、正常系（idが生成されること）・`conversationHistory`の内容が実際にpromptに含まれること・`existingKnowledge`が空/未指定でも動作すること・`existingKnowledge`の内容がpromptに含まれること・再試行成功/失敗・LLM呼び出しエラー（再試行しないこと）・markdownフェンス付きJSON・空配列の候補、を検証しています（`knowledgeExtraction.vertex.test.ts`）。
+
+## Knowledge保存とMongoDB（`knowledge.ts` / `knowledgeApi.ts`）
+
+Deep Dive会話から抽出された候補（`KnowledgeCandidate`）のうち、**ユーザーが確認して選択したものだけ**をMongoDBへ永続化します。「AIが勝手に理解を確定・保存しない」という方針を、抽出（LLM）と保存（ユーザー操作起点のAPI呼び出し）を別のリクエストに分けることで担保しています。
+
+- **認証は未実装（MVP）**: すべてのKnowledgeは固定の`userId: "local-user"`（`knowledge.ts`の`FIXED_USER_ID`）に紐づきます。複数ユーザーの分離は将来の認証実装時に対応します。
+- **コレクション**: `user_knowledge`（DBは`MONGODB_DB_NAME`環境変数、既定`digger`）。ドキュメント形は`{ _id, userId, concept, statement, evidence, confidence, source: { type, url, title }, createdAt, updatedAt }`。MVPのため、インデックス定義やスキーマバリデーション（MongoDB側の`$jsonSchema`等）は行わず、アプリケーション側のzod schema（`knowledgeDocumentSchema`）でのみ形を保証しています。
+- **重複判定（dedup）**: 2段構え。①LLM自身が`existingKnowledge`を見て`isNew`を判定（意味的に近い内容の一次フィルタ。ただし言い回しが変わると`isNew: true`のまま返ってくることがあり、これは既知のMVP限界です）。②保存直前に`knowledge.ts`の`isDuplicateKnowledge()`が、同じ`userId`+`concept`完全一致のドキュメントの中に、`statement`を正規化（空白・句読点除去・小文字化。`normalizeForDedup()`）した上で完全一致するものがあれば、無条件に保存をスキップします（Embedding/Vector Searchのような高度な類似度判定はMVPのスコープ外）。スキップされた件数は`POST /api/knowledge/save`のレスポンス（`skippedCount`）でフロントエンドに伝わり、「N件は既に保存済みのためスキップしました」という控えめなフィードバックに使われます。
+- **`knowledgeApi.ts`**: `POST /api/knowledge/extract`と`POST /api/knowledge/save`のリクエスト検証（zod）・組み立てロジック。`extractKnowledgeRequestSchema`は`articleAnalysisSchema`（`llm/articleAnalysis.ts`）をそのまま使ってバリデーションするため、`articleAnalysis`の形が不正なリクエストは`400`になります。`saveKnowledgeRequestSchema`は`knowledgeCandidateSchema`（`id`を含む）をそのまま使うため、フロントエンドは`/api/knowledge/extract`のレスポンスに含まれる候補をそのまま（ユーザーが選んだものだけ）送り返すだけで済みます。
 
 ## LLMプロバイダー層（`llm/provider/`）
 
@@ -359,13 +394,14 @@ curl -X POST http://localhost:8787/api/llm/test \
 - `llm/deepDive.mock.ts` を、Article Analysis（`articleAnalysis.vertex.ts`）と同じパターンで実LLM化する（`deepDive.vertex.ts`を追加し、`articleAnalysisFactory.ts`と同様のfactoryを`deepDive.ts`（backend直下）に組み込む）
 - `POST /api/llm/test`は開発用の疎通確認APIのため、他の処理の実LLM化が進んだら削除を検討する
 - 記事本文の切り詰め（`MAX_CONTENT_LENGTH`、現状12,000文字の単純な文字数カット）を、文の区切りを考慮した切り詰めや要約前処理に改善する
-- `POST /api/deep-dive`の対話ログをKnowledge Extractionに渡す導線（「理解したことを抽出・保存」の仕組み）
-- Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提）
+- Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提。`llm/personalizedAnalysis.ts`の型自体は`user_knowledge`コレクションと親和性があるので、実装自体は大きくないはず）
 - JavaScriptレンダリングが必要なサイトへの対応（ヘッドレスブラウザの導入）
-- 解析結果・深掘りの会話履歴・ユーザーの理解履歴のMongoDBへの永続化
+- 保存済みKnowledge一覧を見るためのfrontend UI（backendの`GET /api/knowledge`は実装済みだが、対応する画面/セクションは未実装。今回はDeep Diveループの完成を優先しスコープ外とした）
+- Knowledge Extractionの重複判定をEmbedding/Vector Searchベースの意味的な類似度判定に強化する（現状は文字列の正規化一致のみで、言い回しが変わると重複として検出できない）
+- Knowledge ExtractionをArticle Analysisの深掘りだけでなく、記事を読んだだけ（Deep Diveなし）のケースにも広げるかどうかの検討（現状は会話ログが前提）
 - ルーティングが増えた場合の分割（現状は `index.ts` に直書き）
 - リクエストバリデーションの共通化（Honoの `@hono/zod-validator` 等。`llm/`ではすでにzodを導入済み）
-- MongoDBのコレクション/スキーマ定義（現状は接続確認のみで、業務データは未設計）
+- MongoDBのインデックス定義（`user_knowledge`の`{ userId, concept }`や`{ userId, createdAt }`など。現状は件数が少ない前提でインデックス未設定）
 - エラーハンドリングの共通化（現状は各ルートでtry/catch）
 - frontend/backend間で重複しているリクエスト/レスポンス型の共有化
 - `robots.ts`のパーサはAllow/Disallowのみ対応。ワイルドカード（`*`, `$`）や`Crawl-delay`など、より厳密なrobots.txt仕様への対応
