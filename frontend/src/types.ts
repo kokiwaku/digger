@@ -52,6 +52,14 @@ export type DeepDiveResponse = {
   suggestedFollowUps: string[];
 };
 
+export type KnowledgeRelation = "new" | "reinforces" | "extends" | "supersedes";
+
+export type RelationToExisting = {
+  type: KnowledgeRelation;
+  knowledgeId?: string;
+  reason?: string;
+};
+
 export type KnowledgeCandidate = {
   id: string;
   concept: string;
@@ -59,6 +67,7 @@ export type KnowledgeCandidate = {
   evidence: string;
   confidence: "low" | "medium" | "high";
   isNew: boolean;
+  relationToExisting?: RelationToExisting;
 };
 
 export type SavedKnowledge = {

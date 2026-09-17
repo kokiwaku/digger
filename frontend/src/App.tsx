@@ -271,6 +271,23 @@ function ConceptDisclosure({ concept }: { concept: Concept }) {
   );
 }
 
+// relationToExistingがある場合だけ、控えめな一言として表示する（内部的な保持のみで
+// UIには出さない選択肢もあったが、ユーザーが「なぜこの候補が出たか」を軽く把握できるよう
+// 最小限のヒントとして表示する）。
+function describeRelation(relation: KnowledgeCandidate["relationToExisting"]): string | null {
+  if (!relation) return null;
+  switch (relation.type) {
+    case "reinforces":
+      return "すでに理解している内容の再確認です";
+    case "extends":
+      return "以前の理解を深める内容です";
+    case "supersedes":
+      return "以前の理解を更新する内容です";
+    default:
+      return null;
+  }
+}
+
 function KnowledgeConfirmationPanel({
   candidates,
   selectedIndices,
@@ -304,6 +321,9 @@ function KnowledgeConfirmationPanel({
               </label>
               <p className="knowledge-statement">{candidate.statement}</p>
               <p className="knowledge-confidence">信頼度: {candidate.confidence}</p>
+              {describeRelation(candidate.relationToExisting) && (
+                <p className="knowledge-relation-hint">{describeRelation(candidate.relationToExisting)}</p>
+              )}
             </li>
           ))}
         </ul>

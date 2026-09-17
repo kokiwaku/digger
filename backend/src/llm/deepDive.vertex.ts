@@ -71,9 +71,19 @@ function formatConversationHistory(history: ConversationTurn[]): string {
     .join("\n");
 }
 
-function formatUserKnowledge(userKnowledge: UserKnowledge[] | undefined): string {
-  if (!userKnowledge || userKnowledge.length === 0) return "（ユーザーの理解履歴はまだありません。）";
-  return userKnowledge.map((k) => `- ${k.concept}: ${k.statement}`).join("\n");
+// 関連Knowledgeがある場合のみプロンプトに追加する（無ければセクションごと省略）。
+// 「毎回答で無理に過去の理解へ言及する」ような不自然な振る舞いを避けるため、
+// あくまで参考情報として渡すだけで、言及を強制する指示は書かない。
+function formatUserKnowledgeSection(userKnowledge: UserKnowledge[] | undefined): string {
+  if (!userKnowledge || userKnowledge.length === 0) return "";
+
+  const list = userKnowledge.map((k) => `- ${k.concept}: ${k.statement}`).join("\n");
+  return `
+
+# ユーザーが過去の会話で理解したと確認済みの内容（今回の質問に関連しそうなものだけを抜粋）
+${list}
+
+上記は、このユーザーが過去の会話で理解したと確認済みの内容です。同じ内容を初歩から繰り返し説明する必要はありません。必要に応じて、これを前提として説明を進めてください。関連性が高い場合は過去の理解とのつながりを自然に示して構いませんが、「以前あなたは○○を理解しました」のような言い回しを毎回答で繰り返す必要はありません。今回の質問と関連が薄い場合は無理に触れず、通常どおり説明してください。`;
 }
 
 function buildPrompt(input: DeepDiveInput, extraInstruction?: string): string {
@@ -84,9 +94,7 @@ ${formatArticleContext(input.articleAnalysis)}
 
 # これまでの会話
 ${formatConversationHistory(input.conversationHistory)}
-
-# ユーザーがすでに理解していること
-${formatUserKnowledge(input.userKnowledge)}
+${formatUserKnowledgeSection(input.userKnowledge)}
 
 # 今回の質問
 ${input.question}

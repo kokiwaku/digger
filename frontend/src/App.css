@@ -391,6 +391,13 @@
   color: #888;
 }
 
+.knowledge-relation-hint {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: #2b6cb0;
+  font-style: italic;
+}
+
 .knowledge-loading {
   margin-top: 1.5rem;
 }

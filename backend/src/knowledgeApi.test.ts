@@ -81,6 +81,43 @@ test("parseSaveKnowledgeRequest rejects an empty candidates array", () => {
   );
 });
 
+test("parseSaveKnowledgeRequest accepts a candidate with relationToExisting", () => {
+  const request = parseSaveKnowledgeRequest({
+    source: validSource,
+    candidates: [
+      {
+        id: "id-1",
+        concept: "概念",
+        statement: "理解した内容",
+        evidence: "根拠",
+        confidence: "high",
+        isNew: false,
+        relationToExisting: { type: "extends", knowledgeId: "existing-1", reason: "さらに深掘りした" },
+      },
+    ],
+  });
+  assert.equal(request.candidates[0].relationToExisting?.type, "extends");
+});
+
+test("parseSaveKnowledgeRequest rejects an invalid relationToExisting.type", () => {
+  assert.throws(() =>
+    parseSaveKnowledgeRequest({
+      source: validSource,
+      candidates: [
+        {
+          id: "id-1",
+          concept: "概念",
+          statement: "理解した内容",
+          evidence: "根拠",
+          confidence: "high",
+          isNew: false,
+          relationToExisting: { type: "not-a-real-relation" },
+        },
+      ],
+    }),
+  );
+});
+
 test("filterForConfirmationUi drops low-confidence candidates", () => {
   const result = filterForConfirmationUi({
     candidates: [

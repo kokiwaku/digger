@@ -8,12 +8,7 @@ import {
   type KnowledgeExtractionResult,
 } from "./llm/knowledgeExtraction.js";
 import { getKnowledgeExtractionService } from "./llm/knowledgeExtractionFactory.js";
-import {
-  getUserKnowledge,
-  saveMultipleKnowledge,
-  type KnowledgeDocument,
-  type SaveKnowledgeInput,
-} from "./knowledge.js";
+import { getUserKnowledge, saveMultipleKnowledge, toUserKnowledge, type SaveKnowledgeInput } from "./knowledge.js";
 import type { UserKnowledge } from "./llm/personalizedAnalysis.js";
 
 export const extractKnowledgeRequestSchema = z.object({
@@ -29,15 +24,6 @@ export function parseExtractKnowledgeRequest(body: unknown): ExtractKnowledgeReq
     throw new Error(result.error.issues[0]?.message ?? "invalid request");
   }
   return result.data;
-}
-
-function toUserKnowledge(doc: KnowledgeDocument): UserKnowledge {
-  return {
-    id: doc._id?.toHexString() ?? "",
-    concept: doc.concept,
-    statement: doc.statement,
-    confidence: doc.confidence,
-  };
 }
 
 // low confidenceの候補はUXをシンプルに保つため確認UIには出さない（MVP判断。
@@ -92,6 +78,7 @@ export async function saveCandidatesAsKnowledge(request: SaveKnowledgeRequest) {
     evidence: candidate.evidence,
     confidence: candidate.confidence,
     source: request.source,
+    relationToExisting: candidate.relationToExisting,
   }));
 
   const { saved, skipped } = await saveMultipleKnowledge(saveInputs);
