@@ -226,10 +226,11 @@ Article Analysisと同じ構造・パターンを踏襲しています。差分�
 
 1. **コンテキストの組み立て**: 記事本文を毎回再送するのではなく、`ArticleAnalysis`の結果（`summary`/`whyItMatters`/`concepts`/`entities`/`connections`）を`formatArticleContext()`で読みやすいテキストに整形してコンテキストとして使います。
 2. **会話履歴の制御**: `conversationHistory`は直近`MAX_HISTORY_MESSAGES`（20件）のみを使用し、古い発言から落とす単純な上限制御です（要約による圧縮はまだ行いません）。`userKnowledge`が渡されていればプロンプトに含め、`undefined`/空でも問題なく動作します。
-3. **役割設定**: システムプロンプトで「一般的な雑談チャットではなく、今読んでいる記事・テーマを理解するための専用家庭教師」という役割を指示し、回答方針（質問に直接答える→必要な背景補足→新しい専門用語の説明→会話履歴で既出の内容を繰り返さない→ユーザーが既に理解している知識を前提に一段先を説明する→断定を避ける→次の問いを提案する）をpromptで制約しています。
-4. **`relatedConcepts`のschema変更**: `string[]`（概念名の羅列）ではなく`{ name: string, relation: string }[]`にすることで、「今回の質問となぜ関係するのか」をLLMに明示させます。`deepDive.mock.ts`もこの形（`relation`は記事の`concept.description`から組み立て）に追従済みです。
-5. **structured output / 検証 / 再試行 / ログ / timeout**: Article Analysisと全く同じパターン（`z.toJSONSchema()`でJSON Schema化、`safeParse`で検証、1回だけ再試行、`[DeepDive] ...`のログ。質問文や会話全文はログに出さず、provider/model/処理時間/`conversationLength`のみ出力）。
-6. **テスト容易性**: フェイクの`LlmProvider`を注入して、正常系・JSON parse失敗/schema validation失敗からの再試行成功・再試行後も失敗・LLM呼び出しエラー（再試行しないこと）・`conversationHistory`が実際にpromptへ渡ること・上限超過時に古い発言が落ちること・`userKnowledge`未指定でも動作することを検証しています（`deepDive.vertex.test.ts`）。
+3. **役割設定**: システムプロンプトで「一般的な雑談チャットではなく、今読んでいる記事・テーマを理解するための専用家庭教師」という役割を指示し、回答方針（まず結論を簡潔に答える→今回質問された範囲に集中し周辺知識まで無理に広げない→会話履歴で既出の内容を繰り返さない→ユーザーが既に理解している知識を前提に一段先を説明する→断定を避ける→自分から話を広げすぎず次の疑問が生まれる余白を残す）をpromptで制約しています。**Diggerは1回の回答でテーマ全体を説明し切るのではなく、会話の往復を通じて理解を深めるサービスであることを明示しています。**
+4. **回答の長さ**: `answer`の出力ルールで「まず結論を簡潔に述べてから、必要な分だけ補足する」「目安として300〜500文字程度、3〜5段落以内」「不要な背景説明や周辺知識まで広げすぎない」「『さらに詳しく言うと〜』のように自分から話を広げすぎない（ユーザーが詳細を求めてきた場合のみ詳しく説明する）」と明示しています。ただし「短さを優先しつつ、質問への直接的な回答に必要な情報は省略しないこと」も併記しており、文字数を機械的に強制するものではありません（実際に`LLM_PROVIDER=vertex`で検証したところ、397文字・446文字程度の、結論から入る3〜4段落の回答になることを確認しています）。`suggestedFollowUps`（質問提案）のUIは復活させておらず、短さはprompt自体の指示のみで実現しています。
+5. **`relatedConcepts`のschema変更**: `string[]`（概念名の羅列）ではなく`{ name: string, relation: string }[]`にすることで、「今回の質問となぜ関係するのか」をLLMに明示させます。`deepDive.mock.ts`もこの形（`relation`は記事の`concept.description`から組み立て）に追従済みです。
+6. **structured output / 検証 / 再試行 / ログ / timeout**: Article Analysisと全く同じパターン（`z.toJSONSchema()`でJSON Schema化、`safeParse`で検証、1回だけ再試行、`[DeepDive] ...`のログ。質問文や会話全文はログに出さず、provider/model/処理時間/`conversationLength`のみ出力）。
+7. **テスト容易性**: フェイクの`LlmProvider`を注入して、正常系・JSON parse失敗/schema validation失敗からの再試行成功・再試行後も失敗・LLM呼び出しエラー（再試行しないこと）・`conversationHistory`が実際にpromptへ渡ること・上限超過時に古い発言が落ちること・`userKnowledge`未指定でも動作すること・簡潔さ/段落数のガイドラインがpromptに含まれること・質問の範囲に集中し余白を残す旨の指示が含まれることを検証しています（`deepDive.vertex.test.ts`）。
 
 ### Knowledge Extractionの実LLM化（`knowledgeExtraction.vertex.ts`）
 

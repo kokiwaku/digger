@@ -216,3 +216,34 @@ test("ask() prompt discourages forcing a mention of past understanding in every 
   assert.match(capturedInput.prompt, /毎回答で繰り返す必要はありません/);
   assert.doesNotMatch(capturedInput.prompt, /必ず.*言及/);
 });
+
+test("ask() prompt instructs the model to answer concisely with a length/paragraph guideline", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  await service.ask(baseInput());
+
+  assert.ok(capturedInput);
+  assert.match(capturedInput.prompt, /300〜500文字程度/);
+  assert.match(capturedInput.prompt, /3〜5段落以内/);
+  assert.match(capturedInput.prompt, /まず結論を簡潔に/);
+});
+
+test("ask() prompt tells the model to stay within the scope of the question and leave room for follow-ups", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  await service.ask(baseInput());
+
+  assert.ok(capturedInput);
+  assert.match(capturedInput.prompt, /不要な背景説明や周辺知識まで広げすぎない/);
+  assert.match(capturedInput.prompt, /次の疑問が生まれる余白を残す/);
+});
