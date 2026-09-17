@@ -84,6 +84,15 @@ app.post("/api/deep-dive", async (c) => {
     const result = await buildDeepDiveResponse(input);
     return c.json(result);
   } catch (err) {
+    if (err instanceof LlmProviderError) {
+      console.error("[api/deep-dive] Deep Dive provider error", {
+        code: err.code,
+        message: err.message,
+        cause: err.cause,
+      });
+      const { status, message: safeMessage } = toSafeApiResponse(err);
+      return c.json({ error: safeMessage }, status);
+    }
     const message = err instanceof Error ? err.message : "深掘り回答の生成に失敗しました";
     return c.json({ error: message }, 502);
   }

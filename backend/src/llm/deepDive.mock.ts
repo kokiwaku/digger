@@ -11,7 +11,10 @@ export const mockDeepDiveService: DeepDiveService = {
       answer: `「${input.question}」についてですね。${
         isFollowUp ? "これまでの会話も踏まえてお答えすると、" : ""
       }（モック応答）現時点では実際のLLMには接続されておらず、固定の説明文を返しています。実装が進むと、この記事の内容と会話の流れを踏まえた回答がここに表示されます。`,
-      relatedConcepts: input.articleAnalysis.concepts.map((concept) => concept.name).slice(0, 3),
+      relatedConcepts: input.articleAnalysis.concepts.slice(0, 3).map((concept) => ({
+        name: concept.name,
+        relation: concept.description,
+      })),
       suggestedFollowUps: input.articleAnalysis.deepDiveQuestions
         .filter((question) => question !== input.question)
         .slice(0, 2),

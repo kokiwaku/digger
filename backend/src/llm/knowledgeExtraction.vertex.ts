@@ -10,6 +10,7 @@ import {
 } from "./knowledgeExtraction.js";
 import { getLlmProvider } from "./provider/llmProviderFactory.js";
 import { LlmProviderError } from "./provider/llmProviderError.js";
+import { extractJsonText } from "./jsonExtraction.js";
 import type { LlmProvider } from "./provider/llmProvider.js";
 
 // 会話が長くなりすぎた場合に備えて直近のやり取りだけをLLMへ渡す（コストとレイテンシの保守的な上限。
@@ -90,11 +91,6 @@ ${formatExistingKnowledge(input.existingKnowledge)}
 
 const RETRY_INSTRUCTION =
   "前回の出力がschemaに適合しなかったため、指定schemaに厳密に従って再生成してください。";
-
-function extractJsonText(text: string): string {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  return (fenced ? fenced[1] : text).trim();
-}
 
 async function requestOnce(provider: LlmProvider, input: KnowledgeExtractionInput, extraInstruction?: string) {
   const text = await provider.generateText({

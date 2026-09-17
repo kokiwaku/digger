@@ -106,7 +106,7 @@ Content-Type: application/json
 - 質問は常に自由入力欄から行います（AIが提示する質問候補をクリックする導線はUI上にありません）。
 - 2回目以降の質問では、これまでの会話（`{ role: "user" | "assistant", content: string }[]`）を`conversationHistory`として送ります。
 - 成功時のレスポンスは `{ answer, relatedConcepts, suggestedFollowUps }`。**frontendは`answer`のみを表示し、`relatedConcepts`/`suggestedFollowUps`は受け取っても画面には出しません**（Diggerの「ユーザー自身の疑問を起点に掘る」という方針のため）。backendの型・schemaはこれらのフィールドを引き続き保持しています（将来的な別用途のため）。
-- **現時点ではLLM未接続のため、`answer`は固定のモック文言です**（`backend/src/llm/deepDive.mock.ts`）。`relatedConcepts`と`suggestedFollowUps`は記事の解析結果（`concepts`/`deepDiveQuestions`）から実際に組み立てています。
+- `LLM_PROVIDER`で切り替え可能: `mock`（デフォルト）なら記事の解析結果（`concepts`/`deepDiveQuestions`）から組み立てた固定応答、`vertex`ならVertex AI Geminiが記事のArticle Analysis・会話履歴・（あれば）ユーザーの理解履歴を踏まえて実際に回答します。Diggerは一般的な雑談チャットではなく、今読んでいる記事・テーマを理解するための専用家庭教師として振る舞うよう指示しています。
 - 会話履歴はMongoDBにはまだ保存されません（ページをリロードすると消えます）。認証も不要です。
 
 ## 理解の蓄積（Knowledge Extraction）
@@ -232,10 +232,10 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出、Article AnalysisとKnowledge ExtractionのVertex AI（Gemini）実LLM化、および「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、Article Analysis・Deep Dive・Knowledge ExtractionのVertex AI（Gemini）実LLM化、および「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化は実装済みですが、以下は未実装・未設計です。
 
-- Deep Dive（`backend/src/llm/`）を、Article Analysisと同じパターンでVertex AI Geminiに実際に接続する（現状は固定のモック応答）
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線（型・モックは実装済み）
+- Deep Diveの会話履歴の要約（現状は直近20件を単純に切り詰めるだけ）
 - 保存済みKnowledgeを一覧するfrontend UI（backendの`GET /api/knowledge`は実装済み）
 - Knowledge Extractionの重複判定を、文字列の正規化一致からEmbedding/Vector Searchベースの意味的な類似度判定に強化する
 - 認証・ユーザーごとのデータ分離（現状はすべてのKnowledgeが固定ユーザーに紐づくMVP実装）
