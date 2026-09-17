@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-import type { ArticleAnalysis, Concept, ConversationTurn, DeepDiveResponse, DigResult } from "./types";
+import type {
+  ArticleAnalysis,
+  Concept,
+  ConversationTurn,
+  DeepDiveResponse,
+  DigResult,
+  KnowledgeCandidate,
+} from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 
@@ -16,6 +23,14 @@ type DigState =
 type ChatMessage = { role: "user" | "assistant"; content: string };
 
 type DeepDiveState = { status: "idle" } | { status: "loading" } | { status: "error"; message: string };
+
+type KnowledgeSaveState =
+  | { status: "idle" }
+  | { status: "extracting" }
+  | { status: "extracted"; candidates: KnowledgeCandidate[] }
+  | { status: "saving" }
+  | { status: "saved"; savedCount: number; skippedCount: number }
+  | { status: "error"; message: string };
 
 // バックエンドが生成する文章量と、最初にユーザーへ見せる文章量は別物として扱う。
 // summaryは長めに返ってくることがあるため、冒頭の数文だけを切り出して表示する
@@ -62,6 +77,47 @@ async function askDeepDive(
   }
 
   return body as DeepDiveResponse;
+}
+
+async function extractKnowledge(
+  source: { type: "web_article"; url: string; title: string },
+  articleAnalysis: ArticleAnalysis,
+  conversationHistory: ConversationTurn[],
+): Promise<KnowledgeCandidate[]> {
+  const res = await fetch(`${API_BASE_URL}/api/knowledge/extract`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, articleAnalysis, conversationHistory }),
+  });
+
+  const body = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const message = body && typeof body.error === "string" ? body.error : `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+
+  return body.candidates ?? [];
+}
+
+async function saveKnowledge(
+  source: { type: "web_article"; url: string; title: string },
+  candidates: KnowledgeCandidate[],
+): Promise<{ savedCount: number; skippedCount: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/knowledge/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, candidates }),
+  });
+
+  const body = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const message = body && typeof body.error === "string" ? body.error : `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+
+  return body;
 }
 
 // 自由入力欄。Enterで送信、Shift+Enterで改行。pre-chat/chat両方の入力欄で共有する
@@ -157,6 +213,56 @@ function ConceptDisclosure({ concept }: { concept: Concept }) {
   );
 }
 
+function KnowledgeConfirmationPanel({
+  candidates,
+  selectedIndices,
+  onToggleSelect,
+  onSave,
+  saving,
+}: {
+  candidates: KnowledgeCandidate[];
+  selectedIndices: Set<number>;
+  onToggleSelect: (index: number) => void;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  const selectedCandidates = candidates.filter((_, i) => selectedIndices.has(i));
+
+  return (
+    <div className="knowledge-panel">
+      <div className="details-panel">
+        <h3 className="section-label">今回わかったことを確認</h3>
+        <ul className="card-list">
+          {candidates.map((candidate, i) => (
+            <li key={candidate.id} className="knowledge-item">
+              <label className="knowledge-checkbox">
+                <input
+                  type="checkbox"
+                  checked={selectedIndices.has(i)}
+                  onChange={() => onToggleSelect(i)}
+                  disabled={saving}
+                />
+                <span className="knowledge-concept">{candidate.concept}</span>
+              </label>
+              <p className="knowledge-statement">{candidate.statement}</p>
+              <p className="knowledge-confidence">信頼度: {candidate.confidence}</p>
+            </li>
+          ))}
+        </ul>
+        {selectedCandidates.length > 0 && (
+          <button
+            className="dig-button"
+            onClick={onSave}
+            disabled={saving}
+          >
+            {saving ? "保存中..." : `${selectedCandidates.length}件を保存する`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<DigState>({ status: "idle" });
@@ -168,6 +274,10 @@ export default function App() {
   const [showConcepts, setShowConcepts] = useState(false);
   const [showBackground, setShowBackground] = useState(false);
   const [showSummaryInChat, setShowSummaryInChat] = useState(false);
+
+  const [knowledgeSaveState, setKnowledgeSaveState] = useState<KnowledgeSaveState>({ status: "idle" });
+  const [knowledgeSelectedIndices, setKnowledgeSelectedIndices] = useState<Set<number>>(new Set());
+  const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -202,6 +312,56 @@ export default function App() {
       setDeepDiveState({ status: "idle" });
     } catch (err) {
       setDeepDiveState({ status: "error", message: err instanceof Error ? err.message : "深掘りに失敗しました" });
+    }
+  };
+
+  const handleExtractKnowledge = async () => {
+    if (state.status !== "success") return;
+
+    const history: ConversationTurn[] = messages.map((m) => ({ role: m.role, content: m.content }));
+
+    setKnowledgeSaveState({ status: "extracting" });
+    setShowKnowledgePanel(true);
+    setKnowledgeSelectedIndices(new Set());
+
+    try {
+      const candidates = await extractKnowledge(state.result.source, state.result.analysis, history);
+      setKnowledgeSaveState({ status: "extracted", candidates });
+    } catch (err) {
+      setKnowledgeSaveState({ status: "error", message: err instanceof Error ? err.message : "知識抽出に失敗しました" });
+    }
+  };
+
+  const handleSaveSelectedKnowledge = async () => {
+    if (state.status !== "success" || knowledgeSaveState.status !== "extracted") return;
+
+    const selectedCandidates = knowledgeSaveState.candidates.filter((_, i) =>
+      knowledgeSelectedIndices.has(i),
+    );
+
+    if (selectedCandidates.length === 0) return;
+
+    setKnowledgeSaveState({ status: "saving" });
+
+    try {
+      const result = await saveKnowledge(state.result.source, selectedCandidates);
+      setKnowledgeSaveState({
+        status: "saved",
+        savedCount: result.savedCount,
+        skippedCount: result.skippedCount,
+      });
+      setShowKnowledgePanel(false);
+      setKnowledgeSelectedIndices(new Set());
+
+      // 大げさな画面遷移はせず、チャット画面上の小さなフィードバックのみ。数秒後に自動的に消す。
+      setTimeout(() => {
+        setKnowledgeSaveState({ status: "idle" });
+      }, 4000);
+    } catch (err) {
+      setKnowledgeSaveState({
+        status: "error",
+        message: err instanceof Error ? err.message : "知識の保存に失敗しました",
+      });
     }
   };
 
@@ -356,6 +516,53 @@ export default function App() {
                 submitLabel="掘る"
                 loadingLabel="掘っています..."
               />
+
+              {messages.some((m) => m.role === "assistant") && (
+                <button type="button" className="link-button" onClick={handleExtractKnowledge}>
+                  今回わかったことを残す
+                </button>
+              )}
+
+              {(knowledgeSaveState.status === "extracted" || knowledgeSaveState.status === "saving") &&
+                showKnowledgePanel && (
+                  <KnowledgeConfirmationPanel
+                    candidates={
+                      knowledgeSaveState.status === "extracted"
+                        ? knowledgeSaveState.candidates
+                        : []
+                    }
+                    selectedIndices={knowledgeSelectedIndices}
+                    onToggleSelect={(i) => {
+                      const next = new Set(knowledgeSelectedIndices);
+                      if (next.has(i)) {
+                        next.delete(i);
+                      } else {
+                        next.add(i);
+                      }
+                      setKnowledgeSelectedIndices(next);
+                    }}
+                    onSave={handleSaveSelectedKnowledge}
+                    saving={knowledgeSaveState.status === "saving"}
+                  />
+                )}
+
+              {knowledgeSaveState.status === "extracting" && (
+                <div className="knowledge-loading">
+                  <MoleLoader label="わかったことを整理中…" />
+                </div>
+              )}
+
+              {knowledgeSaveState.status === "error" && (
+                <p className="error-message">エラー: {knowledgeSaveState.message}</p>
+              )}
+
+              {knowledgeSaveState.status === "saved" && (
+                <p className="success-message">
+                  {knowledgeSaveState.savedCount}件の理解を保存しました
+                  {knowledgeSaveState.skippedCount > 0 &&
+                    `（${knowledgeSaveState.skippedCount}件は既に保存済みのためスキップしました）`}
+                </p>
+              )}
             </section>
           )}
         </article>

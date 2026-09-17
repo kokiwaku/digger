@@ -109,6 +109,28 @@ Content-Type: application/json
 - **現時点ではLLM未接続のため、`answer`は固定のモック文言です**（`backend/src/llm/deepDive.mock.ts`）。`relatedConcepts`と`suggestedFollowUps`は記事の解析結果（`concepts`/`deepDiveQuestions`）から実際に組み立てています。
 - 会話履歴はMongoDBにはまだ保存されません（ページをリロードすると消えます）。認証も不要です。
 
+## 理解の蓄積（Knowledge Extraction）
+
+「掘る → 分かる → 理解したことが蓄積される」というDiggerのコアループの最後のステップです。深掘り会話をある程度した後、チャット画面の下に控えめな「今回わかったことを残す」リンクが表示されます。押すと、その会話ログをもとにKnowledge Extraction（LLM処理）が「今回新しく理解したと考えられる内容」の候補を生成します。
+
+```
+POST /api/knowledge/extract
+Content-Type: application/json
+
+{
+  "source": { "type": "web_article", "url": "...", "title": "..." },
+  "articleAnalysis": { ... },
+  "conversationHistory": [ ... ]
+}
+```
+
+- **AIは理解を勝手に確定しません**。返ってくるのはあくまで"候補"（`KnowledgeCandidate[]`、各`concept`/`statement`/`confidence`/`evidence`等を持つ）で、記事本文に書いてあるだけの内容やユーザーが質問しただけの内容は候補から除外するようpromptで指示しています。`confidence: "low"`の候補はUXをシンプルに保つため、確認UIに出す前にサーバー側で除外しています。
+- 候補は小さな確認パネルにチェックボックス付きで表示され、ユーザーが選んだものだけが`POST /api/knowledge/save`で保存されます（AIが自動保存することはありません）。
+- 保存済みKnowledgeと（`concept`完全一致 + `statement`正規化後一致で）重複するものは無条件に保存せず、スキップします（Embedding等の高度な類似度判定はMVPのスコープ外）。
+- 保存完了後は画面遷移せず、チャット画面上に「N件の理解を保存しました」という小さなフィードバックのみを表示します。
+- **現時点では認証未実装のため、すべてのKnowledgeは固定ユーザー（`local-user`）に紐づきます**。
+- Knowledge Extractionは`LLM_PROVIDER=vertex`のときArticle Analysisと同じパターンでVertex AI Geminiに実接続されます（詳細は[`backend/README.md`](backend/README.md)を参照）。保存済みKnowledgeを一覧するfrontend UIは今回のスコープ外です（backendの`GET /api/knowledge`は実装済み）。
+
 ### 記事取得ポリシー
 
 Diggerが外部Webサイトへアクセスする際は、以下の方針を守ります。
@@ -137,6 +159,7 @@ docker compose up --build
   - `GET /api/health/db` — Hono → MongoDB の接続確認
   - `POST /api/dig` — URLを受け取り、記事解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
   - `POST /api/deep-dive` — 解析結果と質問を受け取り、深掘りの回答を返す（[深掘り対話機能](#深掘り対話機能)を参照）
+  - `POST /api/knowledge/extract` / `POST /api/knowledge/save` / `GET /api/knowledge` — 深掘り会話から理解の候補を抽出し、ユーザーが選んだものだけをMongoDBへ保存する（[理解の蓄積（Knowledge Extraction）](#理解の蓄積knowledge-extraction)を参照）
   - `POST /api/llm/test` — 開発用のLLM疎通確認API。詳細は [`backend/README.md`](backend/README.md#vertex-ai-gemini-のセットアップ) を参照
 - MongoDB: `mongodb://localhost:27017`（ホストからも接続可能）
 
@@ -209,12 +232,12 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出、およびArticle AnalysisのVertex AI（Gemini）実LLM化は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、Article AnalysisとKnowledge ExtractionのVertex AI（Gemini）実LLM化、および「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化は実装済みですが、以下は未実装・未設計です。
 
-- Deep Dive（`backend/src/llm/`）を、Article Analysisと同じパターンでVertex AI Geminiに実際に接続する
-- Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線と、ユーザーの理解履歴のデータモデル
-- Knowledge Extraction（深掘り対話から学習候補を抽出するLLM処理）を実際の深掘り対話（`/api/deep-dive`）に接続する
-- 解析結果・深掘りの会話履歴・ユーザーの理解履歴のMongoDBへの永続化
-- 認証・ユーザーごとのデータ分離
+- Deep Dive（`backend/src/llm/`）を、Article Analysisと同じパターンでVertex AI Geminiに実際に接続する（現状は固定のモック応答）
+- Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線（型・モックは実装済み）
+- 保存済みKnowledgeを一覧するfrontend UI（backendの`GET /api/knowledge`は実装済み）
+- Knowledge Extractionの重複判定を、文字列の正規化一致からEmbedding/Vector Searchベースの意味的な類似度判定に強化する
+- 認証・ユーザーごとのデータ分離（現状はすべてのKnowledgeが固定ユーザーに紐づくMVP実装）
 
 ニュースURLはあくまで最初の入力手段の一例であり、将来的には記事・動画・書籍・会話メモなど、さまざまな「興味の入口」を扱えるデータモデルにする想定です。設計は今後のイテレーションで詰めていきます。

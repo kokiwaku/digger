@@ -6,6 +6,13 @@ import { buildDigResult, parseArticleUrl } from "./dig.js";
 import { ArticleFetchError } from "./articleFetcher.js";
 import { buildDeepDiveResponse, parseDeepDiveInput } from "./deepDive.js";
 import { callLlmTest, parseLlmTestInput } from "./llmTest.js";
+import {
+  parseExtractKnowledgeRequest,
+  buildKnowledgeExtractionResponse,
+  parseSaveKnowledgeRequest,
+  saveCandidatesAsKnowledge,
+  fetchUserKnowledge,
+} from "./knowledgeApi.js";
 import { LlmProviderError, toSafeApiResponse } from "./llm/provider/llmProviderError.js";
 import type { DigRequest } from "./types.js";
 
@@ -109,6 +116,67 @@ app.post("/api/llm/test", async (c) => {
     }
     console.error("[api/llm/test] unexpected error", err);
     return c.json({ error: "予期しないエラーが発生しました" }, 500);
+  }
+});
+
+app.post("/api/knowledge/extract", async (c) => {
+  const body = await c.req.json().catch(() => null);
+
+  let request;
+  try {
+    request = parseExtractKnowledgeRequest(body);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid request";
+    return c.json({ error: message }, 400);
+  }
+
+  try {
+    const result = await buildKnowledgeExtractionResponse(request);
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof LlmProviderError) {
+      console.error("[api/knowledge/extract] Knowledge Extraction provider error", {
+        code: err.code,
+        message: err.message,
+        cause: err.cause,
+      });
+      const { status, message: safeMessage } = toSafeApiResponse(err);
+      return c.json({ error: safeMessage }, status);
+    }
+    const message = err instanceof Error ? err.message : "知識抽出に失敗しました";
+    return c.json({ error: message }, 502);
+  }
+});
+
+app.post("/api/knowledge/save", async (c) => {
+  const body = await c.req.json().catch(() => null);
+
+  let request;
+  try {
+    request = parseSaveKnowledgeRequest(body);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid request";
+    return c.json({ error: message }, 400);
+  }
+
+  try {
+    const result = await saveCandidatesAsKnowledge(request);
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "知識の保存に失敗しました";
+    console.error("[api/knowledge/save] error", { message });
+    return c.json({ error: message }, 502);
+  }
+});
+
+app.get("/api/knowledge", async (c) => {
+  try {
+    const knowledge = await fetchUserKnowledge();
+    return c.json({ knowledge });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "知識の取得に失敗しました";
+    console.error("[api/knowledge] error", { message });
+    return c.json({ error: message }, 502);
   }
 });
 

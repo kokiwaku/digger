@@ -349,3 +349,59 @@
   white-space: pre-wrap;
 }
 
+.knowledge-panel {
+  margin-top: 2rem;
+}
+
+.knowledge-item {
+  padding: 1rem;
+  background: #fafafa;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  margin-bottom: 0.6rem;
+}
+
+.knowledge-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.knowledge-checkbox input {
+  cursor: pointer;
+}
+
+.knowledge-concept {
+  color: #1a1a1a;
+}
+
+.knowledge-statement {
+  margin: 0.5rem 0 0;
+  font-size: 0.95rem;
+  color: #333;
+  line-height: 1.6;
+}
+
+.knowledge-confidence {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.knowledge-loading {
+  margin-top: 1.5rem;
+}
+
+.success-message {
+  color: #16a34a;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+}
+

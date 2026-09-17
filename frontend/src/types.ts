@@ -46,3 +46,12 @@ export type DeepDiveResponse = {
   relatedConcepts: string[];
   suggestedFollowUps: string[];
 };
+
+export type KnowledgeCandidate = {
+  id: string;
+  concept: string;
+  statement: string;
+  evidence: string;
+  confidence: "low" | "medium" | "high";
+  isNew: boolean;
+};
