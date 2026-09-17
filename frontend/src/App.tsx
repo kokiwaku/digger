@@ -221,6 +221,43 @@ function MoleLoader({ label }: { label: string }) {
   );
 }
 
+// Knowledge Extraction中に使う、ノートに書き込んで整理しているモグラのフレーム。
+// GIFではなく静止画4枚をsetIntervalで順番に切り替える方式（掘るモグラのGIFとは別素材のため）。
+const NOTE_FRAMES = [
+  "/assets/frames/mole-note-1.png",
+  "/assets/frames/mole-note-2.png",
+  "/assets/frames/mole-note-3.png",
+  "/assets/frames/mole-note-4.png",
+];
+const NOTE_FRAME_INTERVAL_MS = 350;
+
+// 「わかったことを整理中…」のローディング表示。MoleLoaderと見た目・構造は共通（同じCSSクラスを再利用）
+// だが、アニメーション方式が異なる（GIFではなくPNGフレームの手動切り替え）ため別コンポーネントにしている。
+// 将来的に保存処理中など他のKnowledge関連のローディングでも label を変えるだけで再利用できる。
+function NoteMoleLoader({ label }: { label: string }) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  useEffect(() => {
+    if (prefersReducedMotion) return;
+    const timer = setInterval(() => {
+      setFrameIndex((i) => (i + 1) % NOTE_FRAMES.length);
+    }, NOTE_FRAME_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [prefersReducedMotion]);
+
+  return (
+    <div className="mole-loader" role="status" aria-live="polite">
+      <img
+        className="mole-loader-image"
+        src={prefersReducedMotion ? NOTE_FRAMES[0] : NOTE_FRAMES[frameIndex]}
+        alt="Diggerがわかったことを整理しています"
+      />
+      <p className="mole-loader-label">{label}</p>
+    </div>
+  );
+}
+
 // 前提知識1件分。名前だけの軽い行として表示し、クリックした場合だけ説明を展開する。
 function ConceptDisclosure({ concept }: { concept: Concept }) {
   const [expanded, setExpanded] = useState(false);
@@ -625,7 +662,7 @@ export default function App() {
 
               {knowledgeSaveState.status === "extracting" && (
                 <div className="knowledge-loading">
-                  <MoleLoader label="わかったことを整理中…" />
+                  <NoteMoleLoader label="わかったことを整理中…" />
                 </div>
               )}
 
