@@ -405,3 +405,32 @@
   font-size: 0.9rem;
 }
 
+/* 保存済みKnowledgeの確認用テスト表示。暫定実装のため、他のUIと視覚的にも
+   区別できるよう控えめな枠線・オレンジ系の色を使う。 */
+.knowledge-list-toggle {
+  margin-bottom: 1rem;
+}
+
+.knowledge-list-panel {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  border: 1px dashed #d97706;
+  border-radius: 10px;
+  background: #fffbeb;
+}
+
+.knowledge-list-item {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #eee;
+}
+
+.knowledge-list-item:last-child {
+  border-bottom: none;
+}
+
+.knowledge-list-meta {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+  color: #888;
+}
+

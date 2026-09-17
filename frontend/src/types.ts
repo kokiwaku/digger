@@ -60,3 +60,12 @@ export type KnowledgeCandidate = {
   confidence: "low" | "medium" | "high";
   isNew: boolean;
 };
+
+export type SavedKnowledge = {
+  _id: string;
+  concept: string;
+  statement: string;
+  confidence: "low" | "medium" | "high";
+  source: DigSource;
+  createdAt: string;
+};
