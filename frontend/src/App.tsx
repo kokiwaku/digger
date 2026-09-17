@@ -7,6 +7,7 @@ import type {
   DeepDiveResponse,
   DigResult,
   KnowledgeCandidate,
+  SavedKnowledge,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
@@ -31,6 +32,14 @@ type KnowledgeSaveState =
   | { status: "saving" }
   | { status: "saved"; savedCount: number; skippedCount: number }
   | { status: "error"; message: string };
+
+// 保存済みKnowledgeの確認用テスト表示。恒久的な一覧UIではなく、動作確認のための
+// 暫定実装（不要になったら削除してよい）。
+type KnowledgeListState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "success"; items: SavedKnowledge[] };
 
 // バックエンドが生成する文章量と、最初にユーザーへ見せる文章量は別物として扱う。
 // summaryは長めに返ってくることがあるため、冒頭の数文だけを切り出して表示する
@@ -118,6 +127,18 @@ async function saveKnowledge(
   }
 
   return body;
+}
+
+async function fetchSavedKnowledge(): Promise<SavedKnowledge[]> {
+  const res = await fetch(`${API_BASE_URL}/api/knowledge`);
+  const body = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const message = body && typeof body.error === "string" ? body.error : `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+
+  return body.knowledge ?? [];
 }
 
 // 自由入力欄。Enterで送信、Shift+Enterで改行。pre-chat/chat両方の入力欄で共有する
@@ -279,6 +300,27 @@ export default function App() {
   const [knowledgeSelectedIndices, setKnowledgeSelectedIndices] = useState<Set<number>>(new Set());
   const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
 
+  const [showKnowledgeList, setShowKnowledgeList] = useState(false);
+  const [knowledgeListState, setKnowledgeListState] = useState<KnowledgeListState>({ status: "idle" });
+
+  const handleToggleKnowledgeList = async () => {
+    if (showKnowledgeList) {
+      setShowKnowledgeList(false);
+      return;
+    }
+    setShowKnowledgeList(true);
+    setKnowledgeListState({ status: "loading" });
+    try {
+      const items = await fetchSavedKnowledge();
+      setKnowledgeListState({ status: "success", items });
+    } catch (err) {
+      setKnowledgeListState({
+        status: "error",
+        message: err instanceof Error ? err.message : "取得に失敗しました",
+      });
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setState({ status: "loading" });
@@ -376,6 +418,41 @@ export default function App() {
         Digger
       </h1>
       <p className="tagline">興味を持ったことを深掘りし、理解を蓄積していくためのツール</p>
+
+      <button type="button" className="link-button knowledge-list-toggle" onClick={handleToggleKnowledgeList}>
+        {showKnowledgeList ? "保存済みの理解を閉じる" : "保存済みの理解を見る（テスト表示）"}
+      </button>
+
+      {showKnowledgeList && (
+        <div className="knowledge-list-panel">
+          {knowledgeListState.status === "loading" && <p className="section-body">読み込み中…</p>}
+          {knowledgeListState.status === "error" && (
+            <p className="error-message">エラー: {knowledgeListState.message}</p>
+          )}
+          {knowledgeListState.status === "success" && (
+            <>
+              {knowledgeListState.items.length === 0 ? (
+                <p className="section-body">まだ保存された理解はありません。</p>
+              ) : (
+                <ul className="card-list">
+                  {knowledgeListState.items.map((item) => (
+                    <li key={item._id} className="knowledge-list-item">
+                      <p className="knowledge-concept">{item.concept}</p>
+                      <p className="knowledge-statement">{item.statement}</p>
+                      <p className="knowledge-list-meta">
+                        confidence: {item.confidence} / {new Date(item.createdAt).toLocaleString()} /{" "}
+                        <a href={item.source.url} target="_blank" rel="noreferrer">
+                          {item.source.title}
+                        </a>
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <form className="dig-form" onSubmit={handleSubmit}>
         <input

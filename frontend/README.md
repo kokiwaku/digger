@@ -67,9 +67,10 @@ flowchart TD
     - **候補確認パネル（`KnowledgeConfirmationPanel`）**: 抽出結果（`KnowledgeCandidate[]`。`confidence: "low"`は事前にbackend側で除外済み）をチェックボックス付きの一覧として表示し、`details-panel`/`card-list`と同じCSSパターンを再利用しています。各候補の`concept`・`statement`・`confidence`を表示し（`evidence`は内部の判断材料のためUIには常時表示しません）、ユーザーが選んだものだけが「N件を保存する」ボタンで有効になります。**AIは自動保存しません**。選択状態は`Set<number>`（`knowledgeSelectedIndices`）で管理します。
     - 保存を押すと`handleSaveSelectedKnowledge()`が`saveKnowledge()`（`POST /api/knowledge/save`）を呼び、選択された候補（`id`を含む、`/api/knowledge/extract`のレスポンスをそのまま利用）を送ります。保存後は画面遷移せず、パネルを閉じてチャット画面上に小さく「N件の理解を保存しました」（backendが重複としてスキップした件数があれば「M件は既に保存済みのためスキップしました」も併記）と表示し、4秒後に自動的に消えます。状態は`KnowledgeSaveState`（`idle`/`extracting`/`extracted`/`saving`/`saved`/`error`）という1つの判別可能なユニオン型で管理します。
     - 保存失敗時は`error-message`で`error`メッセージを表示するのみで、チャット自体やそれまでの会話状態は壊れません（`knowledgeSaveState`は独立したstateのため）。
+  - **「保存済みの理解を見る（テスト表示）」**: `GET /api/knowledge`で保存済みのKnowledge全件を取得し、確認できるようにするための**暫定的な動作確認用UI**です（`showKnowledgeList`/`knowledgeListState`という、記事の解析やチャットの状態とは完全に独立したstateで管理）。タグライン直下（記事を掘る前でもクリック可能）に控えめな`link-button`として置かれ、押すたびに一覧を取得し直します（キャッシュしません）。パネルはオレンジ系の破線枠（`.knowledge-list-panel`）で他のUIと視覚的に区別しており、各項目は`concept`/`statement`/`confidence`/保存日時/出典記事へのリンクのみを並べる簡素な表示です（編集・削除・ページネーションなし）。**恒久的な一覧UIではなく、Knowledge Extraction機能の動作確認のための一時的な実装として追加したもので、将来的にきちんとした一覧UIに置き換えるか削除する想定です。**
   - エラー時はバックエンドが返した `error` メッセージ、またはネットワークエラーの内容を表示します（`400`/`403`/`422`/`502`いずれも同じ見た目で表示、種別による出し分けは未実装）。
   - **`MoleLoader`（掘るモグラのローディング表示）**: 通常のspinnerの代わりに、Diggerのキャラクター（スコップで掘るモグラ）のGIFアニメーションを表示するコンポーネントです。`public/assets/digger-mole-dig.gif`（96px、モバイルは72px。`@media (max-width: 480px)`で切り替え）とラベル文言を横並びで表示するだけの軽量な実装で、画面全体を覆うオーバーレイにはせず、処理中のセクション内に自然に差し込みます。3箇所で使用: ①`digUrl()`実行中（「記事を掘っています…」）、②Pre-chat Primary Viewでの初回Deep Dive送信中、③Chat Viewでの2回目以降のDeep Dive送信中（②③とも「もう少し掘っています…」、`deepDiveState.status === "loading"`から表示）。`usePrefersReducedMotion()`という小さなフックが`window.matchMedia("(prefers-reduced-motion: reduce)")`を監視し、有効な環境ではGIFの代わりに静止フレーム`public/assets/frames/mole-dig-1.png`を表示します。エラー時・完了時はstateが`loading`から外れるため、既存のローディング分岐の仕組みに乗る形でDOMから自動的に消えます（表示/非表示のロジック自体は変更していません）。
-- **`types.ts`**: `/api/dig`・`/api/deep-dive`・`/api/knowledge/extract` のレスポンス型（`DigResult` / `DigSource` / `ArticleAnalysis` / `Concept` / `Entity` / `Connection` / `ConversationTurn` / `DeepDiveResponse` / `KnowledgeCandidate`）を定義。backend側の `src/types.ts`・`src/llm/*.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。チャットUI用の`ChatMessage`型（`App.tsx`内のローカル型）は`{ role, content }`のみを持ち、`suggestedFollowUps`は保持しません（UIで使わないため）。
+- **`types.ts`**: `/api/dig`・`/api/deep-dive`・`/api/knowledge/extract`・`GET /api/knowledge` のレスポンス型（`DigResult` / `DigSource` / `ArticleAnalysis` / `Concept` / `Entity` / `Connection` / `ConversationTurn` / `DeepDiveResponse` / `KnowledgeCandidate` / `SavedKnowledge`）を定義。backend側の `src/types.ts`・`src/llm/*.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。チャットUI用の`ChatMessage`型（`App.tsx`内のローカル型）は`{ role, content }`のみを持ち、`suggestedFollowUps`は保持しません（UIで使わないため）。
 - **`App.css`**: 余白の広いシンプルなレイアウト。`flex-wrap` と相対単位でスマホ幅でも崩れないようにしています。CSSフレームワーク等は未導入です。
 
 ## 環境変数（`.env`）
@@ -110,7 +111,7 @@ npm run dev
 ## 今後の拡張ポイント（未実装）
 
 - Chat Viewから「前提知識を見る」「この記事の背景」相当の情報に戻れる導線（現状は「記事の要点を見る」で短い要約だけ再表示可能。前提知識・背景はChat View突入後は見られない）
-- 保存済みKnowledgeの一覧画面/セクション（backendの`GET /api/knowledge`は実装済み。今回はDeep Diveループの完成を優先しスコープ外とした）
+- 保存済みKnowledgeのきちんとした一覧UI（現状は「保存済みの理解を見る（テスト表示）」という動作確認用の暫定表示のみ。デザイン・ページネーション・編集/削除等は未実装で、いずれ作り直すか削除する前提）
 - エラー種別（`400`/`403`/`422`/`502`）に応じたUIの出し分け（現状は全て同じ見た目。`/api/knowledge/*`も同様）
 - 深掘りの会話をリロード後も残すための永続化（現状はページをリロードすると消える）
 - ルーティング（現状はApp.tsx単一ページ）

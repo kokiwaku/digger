@@ -422,7 +422,7 @@ curl -X POST http://localhost:8787/api/llm/test \
 - 記事本文の切り詰め（`MAX_CONTENT_LENGTH`、現状12,000文字の単純な文字数カット）を、文の区切りを考慮した切り詰めや要約前処理に改善する
 - Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提。`llm/personalizedAnalysis.ts`の型自体は`user_knowledge`コレクションと親和性があるので、実装自体は大きくないはず）
 - JavaScriptレンダリングが必要なサイトへの対応（ヘッドレスブラウザの導入）
-- 保存済みKnowledge一覧を見るためのfrontend UI（backendの`GET /api/knowledge`は実装済みだが、対応する画面/セクションは未実装。今回はDeep Diveループの完成を優先しスコープ外とした）
+- 保存済みKnowledgeのきちんとした一覧UI（現状は動作確認用の暫定的なテスト表示のみ。詳細は[`frontend/README.md`](../frontend/README.md)を参照）
 - Knowledge Extractionの重複判定をEmbedding/Vector Searchベースの意味的な類似度判定に強化する（現状は文字列の正規化一致のみで、言い回しが変わると重複として検出できない）
 - Knowledge ExtractionをArticle Analysisの深掘りだけでなく、記事を読んだだけ（Deep Diveなし）のケースにも広げるかどうかの検討（現状は会話ログが前提）
 - ルーティングが増えた場合の分割（現状は `index.ts` に直書き）

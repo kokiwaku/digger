@@ -129,7 +129,7 @@ Content-Type: application/json
 - 保存済みKnowledgeと（`concept`完全一致 + `statement`正規化後一致で）重複するものは無条件に保存せず、スキップします（Embedding等の高度な類似度判定はMVPのスコープ外）。
 - 保存完了後は画面遷移せず、チャット画面上に「N件の理解を保存しました」という小さなフィードバックのみを表示します。
 - **現時点では認証未実装のため、すべてのKnowledgeは固定ユーザー（`local-user`）に紐づきます**。
-- Knowledge Extractionは`LLM_PROVIDER=vertex`のときArticle Analysisと同じパターンでVertex AI Geminiに実接続されます（詳細は[`backend/README.md`](backend/README.md)を参照）。保存済みKnowledgeを一覧するfrontend UIは今回のスコープ外です（backendの`GET /api/knowledge`は実装済み）。
+- Knowledge Extractionは`LLM_PROVIDER=vertex`のときArticle Analysisと同じパターンでVertex AI Geminiに実接続されます（詳細は[`backend/README.md`](backend/README.md)を参照）。保存済みKnowledgeは、タグライン直下の「保存済みの理解を見る（テスト表示）」から動作確認用の暫定的な一覧表示のみ可能です（きちんとした一覧UIは未実装）。
 
 ### 記事取得ポリシー
 
@@ -236,7 +236,7 @@ npm run dev
 
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線（型・モックは実装済み）
 - Deep Diveの会話履歴の要約（現状は直近20件を単純に切り詰めるだけ）
-- 保存済みKnowledgeを一覧するfrontend UI（backendの`GET /api/knowledge`は実装済み）
+- 保存済みKnowledgeのきちんとした一覧UI（現状は動作確認用の暫定的なテスト表示のみ）
 - Knowledge Extractionの重複判定を、文字列の正規化一致からEmbedding/Vector Searchベースの意味的な類似度判定に強化する
 - 認証・ユーザーごとのデータ分離（現状はすべてのKnowledgeが固定ユーザーに紐づくMVP実装）
 
