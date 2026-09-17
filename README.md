@@ -107,6 +107,8 @@ Content-Type: application/json
 - 2回目以降の質問では、これまでの会話（`{ role: "user" | "assistant", content: string }[]`）を`conversationHistory`として送ります。
 - 成功時のレスポンスは `{ answer, relatedConcepts, suggestedFollowUps }`。**frontendは`answer`のみを表示し、`relatedConcepts`/`suggestedFollowUps`は受け取っても画面には出しません**（Diggerの「ユーザー自身の疑問を起点に掘る」という方針のため）。backendの型・schemaはこれらのフィールドを引き続き保持しています（将来的な別用途のため）。
 - `LLM_PROVIDER`で切り替え可能: `mock`（デフォルト）なら記事の解析結果（`concepts`/`deepDiveQuestions`）から組み立てた固定応答、`vertex`ならVertex AI Geminiが記事のArticle Analysis・会話履歴・（あれば）ユーザーの理解履歴を踏まえて実際に回答します。Diggerは一般的な雑談チャットではなく、今読んでいる記事・テーマを理解するための専用家庭教師として振る舞うよう指示しています。
+- **回答は短く会話的で、質問の種類に応じて長さが変わります**: Diggerは1回の回答でテーマ全体を説明し切るのではなく、ユーザーとの往復で理解を深めるサービスという方針のもと、まず質問に直接答え、今回質問された範囲に集中し、不要な背景説明や周辺知識まで広げすぎないようpromptで指示しています。「MI6の起源は？」のような単純な事実質問は150〜300文字程度、「なぜ利上げすると円高になりやすい？」のような因果関係・仕組みの質問は300〜500文字程度（3〜5段落程度）を目安にし、「詳しく」「もっと深掘りして」のように明示的に詳細を求められた場合のみ、その目安にとらわれず詳しく説明します。「詳しい回答」より「今の疑問にちょうどよく答える」ことを優先していますが、短くするために情報を曖昧にすることはありません。
+- **保存済みKnowledgeを自動的に活用します**: クライアントから明示的に渡さなくても、サーバー側が保存済みKnowledge（`status: active`/`foundational`のみ）の中から今回の質問・記事に関連しそうなものだけを自動的に選び、Geminiに「このユーザーが過去に理解したこと」として渡します（毎回全件を送るのではなく、関連しそうな3〜5件程度に絞り込みます。詳細は[`backend/README.md`](backend/README.md)を参照）。Geminiは、関連性が高ければ過去の理解と自然につなげて説明しますが、毎回答で無理に「以前あなたは○○を理解しました」のように触れることはありません。関連するKnowledgeが無い場合は従来通り通常の説明をします。
 - 会話履歴はMongoDBにはまだ保存されません（ページをリロードすると消えます）。認証も不要です。
 
 ## 理解の蓄積（Knowledge Extraction）
@@ -125,9 +127,11 @@ Content-Type: application/json
 ```
 
 - **AIは理解を勝手に確定しません**。返ってくるのはあくまで"候補"（`KnowledgeCandidate[]`、各`concept`/`statement`/`confidence`/`evidence`等を持つ）で、記事本文に書いてあるだけの内容やユーザーが質問しただけの内容は候補から除外するようpromptで指示しています。`confidence: "low"`の候補はUXをシンプルに保つため、確認UIに出す前にサーバー側で除外しています。
+- **Knowledgeは「不変のメモ」ではなく「現在の理解状態を構成する要素」として扱います**。新しい候補が既存Knowledgeとどう関係するか（`relationToExisting`: `new`＝新しい理解／`reinforces`＝別の文脈での再確認／`extends`＝既存を前提にさらに理解が広がった／`supersedes`＝既存の理解を置き換える）もAIが判定します。
+- **確認パネルは「保存する知識一覧」ではなく「今回、理解がどう変わったか」として見せます**。`reinforces`（既に理解している内容の再確認）は確認候補一覧にそもそも表示されません（該当する候補しかない場合は「今回は新しく保存する内容はありませんでした」と表示）。残りは「新しくわかったこと」（`new`）・「理解が深まったこと」（`extends`）・「理解を更新する」（`supersedes`。以前の理解と今回の理解を並べて表示）というカテゴリ別の見出しで表示されます。
 - 候補は小さな確認パネルにチェックボックス付きで表示され、ユーザーが選んだものだけが`POST /api/knowledge/save`で保存されます（AIが自動保存することはありません）。
 - 保存済みKnowledgeと（`concept`完全一致 + `statement`正規化後一致で）重複するものは無条件に保存せず、スキップします（Embedding等の高度な類似度判定はMVPのスコープ外）。
-- 保存完了後は画面遷移せず、チャット画面上に「N件の理解を保存しました」という小さなフィードバックのみを表示します。
+- 保存完了後は画面遷移せず、チャット画面上に「新しい理解を1件保存しました」「理解が2件深まりました」のような、relationに応じた小さなフィードバックを表示します。
 - **現時点では認証未実装のため、すべてのKnowledgeは固定ユーザー（`local-user`）に紐づきます**。
 - Knowledge Extractionは`LLM_PROVIDER=vertex`のときArticle Analysisと同じパターンでVertex AI Geminiに実接続されます（詳細は[`backend/README.md`](backend/README.md)を参照）。保存済みKnowledgeは、タグライン直下の「保存済みの理解を見る（テスト表示）」から動作確認用の暫定的な一覧表示のみ可能です（きちんとした一覧UIは未実装）。
 
@@ -232,12 +236,14 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出、Article Analysis・Deep Dive・Knowledge ExtractionのVertex AI（Gemini）実LLM化、および「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、Article Analysis・Deep Dive・Knowledge ExtractionのVertex AI（Gemini）実LLM化、「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化、保存済みKnowledgeのDeep Diveでの再利用、Knowledgeの理解状態（`status`）・既存Knowledgeとの関係（`relationToExisting`）の判定は実装済みですが、以下は未実装・未設計です。
 
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線（型・モックは実装済み）
 - Deep Diveの会話履歴の要約（現状は直近20件を単純に切り詰めるだけ）
 - 保存済みKnowledgeのきちんとした一覧UI（現状は動作確認用の暫定的なテスト表示のみ）
 - Knowledge Extractionの重複判定を、文字列の正規化一致からEmbedding/Vector Searchベースの意味的な類似度判定に強化する
+- **Knowledgeの自動統合**: `relationToExisting`（`extends`/`supersedes`）を使って、既存Knowledgeを実際に`merged`/`outdated`へ遷移させたり書き換えたりする処理（今回は判定・記録のみ）
+- **`active`→`foundational`への自動昇格**（「十分理解された」Knowledgeを暗黙の前提として扱う仕組み。`status`フィールド自体は用意済み）
 - 認証・ユーザーごとのデータ分離（現状はすべてのKnowledgeが固定ユーザーに紐づくMVP実装）
 
 ニュースURLはあくまで最初の入力手段の一例であり、将来的には記事・動画・書籍・会話メモなど、さまざまな「興味の入口」を扱えるデータモデルにする想定です。設計は今後のイテレーションで詰めていきます。

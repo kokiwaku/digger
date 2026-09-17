@@ -34,6 +34,14 @@ Diggerは、「興味を持ったことを深掘りし、理解したことを�
   （悪い例:「政策金利とは金利である」、良い例:「中央銀行が政策金利を変更すると、市場金利や銀行の貸出金利にも影響が波及しうる」）。
 - 会話から理解した可能性のある内容が見つからない場合は、候補を無理に作らず空配列を返してください。
 
+Diggerは「Knowledgeを増やすこと」自体を目的とせず、ユーザーの理解状態を表現することを目指しています。
+新しいcandidateが既存Knowledgeと意味的に関係する場合は、relationToExistingで関係を判定してください（無理に紐付けないこと。関連がなければ省略してよい）。
+- "reinforces": 既存Knowledgeとほぼ同じ理解を、別の文脈から再確認・強化しているだけ（表現が違うだけで実質同じ内容）。
+- "extends": 既存Knowledgeを前提として、さらに理解が広がっている。
+- "supersedes": 既存Knowledgeの内容が不正確または古く、今回の理解でより正確に置き換えるべき。
+- 上記いずれかに該当する場合は、対応する既存Knowledgeの[id]をknowledgeIdに設定し、reasonに短い理由を書いてください。
+- reinforces/extends/supersedesのいずれかを設定した場合、isNewはfalseにしてください。関連がない場合（=new相当）はrelationToExisting自体を省略し、isNewはtrueにしてください。
+
 出力は指定されたJSON schemaに厳密に従ってください。`;
 
 function truncateConversation(
@@ -50,11 +58,13 @@ function formatConversation(conversation: KnowledgeExtractionInput["conversation
     .join("\n");
 }
 
+// idを含めて渡すことで、LLMがrelationToExisting.knowledgeIdとして特定の既存Knowledgeを
+// 参照できるようにする（無理な紐付けは禁止しているが、紐付ける場合はこのidを使う）。
 function formatExistingKnowledge(existingKnowledge: KnowledgeExtractionInput["existingKnowledge"]): string {
   if (!existingKnowledge || existingKnowledge.length === 0) {
     return "（このユーザーが過去に保存した理解はまだありません）";
   }
-  return existingKnowledge.map((k) => `- ${k.concept}: ${k.statement}`).join("\n");
+  return existingKnowledge.map((k) => `- [id: ${k.id}] ${k.concept}: ${k.statement}`).join("\n");
 }
 
 function buildPrompt(input: KnowledgeExtractionInput, extraInstruction?: string): string {
@@ -73,7 +83,7 @@ ${input.articleAnalysis.concepts.map((c) => `- ${c.name}: ${c.description}`).joi
 # Deep Dive会話ログ
 ${formatConversation(conversation)}
 
-# このユーザーが過去に保存した理解（重複判定用。これと実質同じ内容ならisNew=falseにする）
+# このユーザーが過去に保存した理解（[id]付き。重複判定・relationToExisting判定に使う）
 ${formatExistingKnowledge(input.existingKnowledge)}
 
 # 出力ルール
@@ -82,7 +92,7 @@ ${formatExistingKnowledge(input.existingKnowledge)}
 - statement: 会話を通してユーザーが理解したと考えられる内容を1文で。再利用可能な粒度にする。
 - evidence: なぜ「理解した可能性がある」と判断したか、会話中の具体的な根拠を短く記録する（ユーザーには常時表示されない内部情報）。
 - confidence: "high"=ユーザーが自分の言葉で言い換えたり正しく関連づけたりしている / "medium"=納得しているように見えるが理解確認は十分でない / "low"=AIの説明を読んだだけで理解を裏付ける情報が少ない。
-- isNew: 上記の「過去に保存した理解」と実質的に同じ内容ならfalse、新しい理解ならtrue。
+- isNew / relationToExisting: 上記の「過去に保存した理解」のいずれかと意味的に関係する場合は、relationToExisting（type/knowledgeId/reason）を設定しisNewはfalseにする。関連がなければrelationToExisting自体を省略しisNewはtrueにする。
 
 指定されたJSON schemaに厳密に従ってJSON形式のみで出力してください。`;
 

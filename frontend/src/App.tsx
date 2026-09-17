@@ -30,7 +30,7 @@ type KnowledgeSaveState =
   | { status: "extracting" }
   | { status: "extracted"; candidates: KnowledgeCandidate[] }
   | { status: "saving" }
-  | { status: "saved"; savedCount: number; skippedCount: number }
+  | { status: "saved"; message: string }
   | { status: "error"; message: string };
 
 // 保存済みKnowledgeの確認用テスト表示。恒久的な一覧UIではなく、動作確認のための
@@ -48,6 +48,29 @@ function firstSentences(text: string, maxSentences: number): string {
   const sentences = text.match(/[^。！？]*[。！？]|[^。！？]+$/g);
   if (!sentences) return text.trim();
   return sentences.slice(0, maxSentences).join("").trim();
+}
+
+// 保存後のフィードバックを「N件保存しました」だけでなく、可能な範囲でrelationに応じた
+// 表現にする（新しくわかったこと/理解が深まったこと/更新したこと）。保存対象を選んだ時点の
+// displayCategoryから算出するだけの簡易な実装（実際の保存件数と多少ずれても許容する）。
+function describeSaveResult(
+  selectedCandidates: KnowledgeCandidate[],
+  savedCount: number,
+  skippedCount: number,
+): string {
+  const counts = { new: 0, deepened: 0, updated: 0 };
+  for (const candidate of selectedCandidates) {
+    counts[candidate.displayCategory]++;
+  }
+
+  const sentences: string[] = [];
+  if (counts.new > 0) sentences.push(`新しい理解を${counts.new}件保存しました。`);
+  if (counts.deepened > 0) sentences.push(`理解が${counts.deepened}件深まりました。`);
+  if (counts.updated > 0) sentences.push(`理解を${counts.updated}件更新しました。`);
+
+  const base = sentences.length > 0 ? sentences.join("") : `${savedCount}件の理解を保存しました。`;
+  const skipped = skippedCount > 0 ? `（${skippedCount}件は既に保存済みのためスキップしました）` : "";
+  return `${base}${skipped}`;
 }
 
 async function digUrl(url: string): Promise<DigResult> {
@@ -271,49 +294,122 @@ function ConceptDisclosure({ concept }: { concept: Concept }) {
   );
 }
 
+// Diggerは「Knowledgeを増やすこと」ではなく「理解状態がどう変化したか」を見せたい。
+// reinforces相当の候補はbackend側で確認候補一覧から除外済みなので、ここに来る候補は
+// 常にnew/deepened/updatedのいずれか（displayCategory）。カテゴリごとに見出しを分けて表示する。
+const CATEGORY_LABELS: Record<KnowledgeCandidate["displayCategory"], string> = {
+  new: "新しくわかったこと",
+  deepened: "理解が深まったこと",
+  updated: "理解を更新する",
+};
+const CATEGORY_ORDER: KnowledgeCandidate["displayCategory"][] = ["new", "deepened", "updated"];
+
+function groupCandidatesByCategory(
+  candidates: KnowledgeCandidate[],
+): Partial<Record<KnowledgeCandidate["displayCategory"], KnowledgeCandidate[]>> {
+  const groups: Partial<Record<KnowledgeCandidate["displayCategory"], KnowledgeCandidate[]>> = {};
+  for (const candidate of candidates) {
+    (groups[candidate.displayCategory] ??= []).push(candidate);
+  }
+  return groups;
+}
+
+function KnowledgeCandidateItem({
+  candidate,
+  selected,
+  onToggleSelect,
+  saving,
+}: {
+  candidate: KnowledgeCandidate;
+  selected: boolean;
+  onToggleSelect: () => void;
+  saving: boolean;
+}) {
+  return (
+    <li className="knowledge-item">
+      <label className="knowledge-checkbox">
+        <input type="checkbox" checked={selected} onChange={onToggleSelect} disabled={saving} />
+        <span className="knowledge-concept">{candidate.concept}</span>
+      </label>
+
+      {candidate.displayCategory === "updated" && candidate.relatedKnowledge ? (
+        <div className="knowledge-update-compare">
+          <p className="knowledge-update-line">
+            <span className="knowledge-update-label">以前の理解:</span> {candidate.relatedKnowledge.statement}
+          </p>
+          <p className="knowledge-update-line">
+            <span className="knowledge-update-label">今回の理解:</span> {candidate.statement}
+          </p>
+        </div>
+      ) : (
+        <p className="knowledge-statement">{candidate.statement}</p>
+      )}
+
+      {candidate.displayCategory === "deepened" && candidate.relatedKnowledge && (
+        <p className="knowledge-relation-hint">
+          以前の「{candidate.relatedKnowledge.concept}」から理解が深まりました
+        </p>
+      )}
+
+      <p className="knowledge-confidence">信頼度: {candidate.confidence}</p>
+    </li>
+  );
+}
+
 function KnowledgeConfirmationPanel({
   candidates,
-  selectedIndices,
+  selectedIds,
   onToggleSelect,
   onSave,
   saving,
 }: {
   candidates: KnowledgeCandidate[];
-  selectedIndices: Set<number>;
-  onToggleSelect: (index: number) => void;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
   onSave: () => void;
   saving: boolean;
 }) {
-  const selectedCandidates = candidates.filter((_, i) => selectedIndices.has(i));
+  const selectedCount = candidates.filter((c) => selectedIds.has(c.id)).length;
+
+  if (candidates.length === 0) {
+    return (
+      <div className="knowledge-panel">
+        <div className="details-panel">
+          <p className="section-body">今回は新しく保存する内容はありませんでした。</p>
+        </div>
+      </div>
+    );
+  }
+
+  const groups = groupCandidatesByCategory(candidates);
 
   return (
     <div className="knowledge-panel">
       <div className="details-panel">
-        <h3 className="section-label">今回わかったことを確認</h3>
-        <ul className="card-list">
-          {candidates.map((candidate, i) => (
-            <li key={candidate.id} className="knowledge-item">
-              <label className="knowledge-checkbox">
-                <input
-                  type="checkbox"
-                  checked={selectedIndices.has(i)}
-                  onChange={() => onToggleSelect(i)}
-                  disabled={saving}
-                />
-                <span className="knowledge-concept">{candidate.concept}</span>
-              </label>
-              <p className="knowledge-statement">{candidate.statement}</p>
-              <p className="knowledge-confidence">信頼度: {candidate.confidence}</p>
-            </li>
-          ))}
-        </ul>
-        {selectedCandidates.length > 0 && (
-          <button
-            className="dig-button"
-            onClick={onSave}
-            disabled={saving}
-          >
-            {saving ? "保存中..." : `${selectedCandidates.length}件を保存する`}
+        <h3 className="section-label">今回、理解がどう変わったか</h3>
+        {CATEGORY_ORDER.map((category) => {
+          const items = groups[category];
+          if (!items || items.length === 0) return null;
+          return (
+            <div key={category} className="knowledge-category">
+              <h4 className="knowledge-category-label">{CATEGORY_LABELS[category]}</h4>
+              <ul className="card-list">
+                {items.map((candidate) => (
+                  <KnowledgeCandidateItem
+                    key={candidate.id}
+                    candidate={candidate}
+                    selected={selectedIds.has(candidate.id)}
+                    onToggleSelect={() => onToggleSelect(candidate.id)}
+                    saving={saving}
+                  />
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+        {selectedCount > 0 && (
+          <button className="dig-button" onClick={onSave} disabled={saving}>
+            {saving ? "保存中..." : "保存する"}
           </button>
         )}
       </div>
@@ -334,7 +430,7 @@ export default function App() {
   const [showSummaryInChat, setShowSummaryInChat] = useState(false);
 
   const [knowledgeSaveState, setKnowledgeSaveState] = useState<KnowledgeSaveState>({ status: "idle" });
-  const [knowledgeSelectedIndices, setKnowledgeSelectedIndices] = useState<Set<number>>(new Set());
+  const [knowledgeSelectedIds, setKnowledgeSelectedIds] = useState<Set<string>>(new Set());
   const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
 
   const [showKnowledgeList, setShowKnowledgeList] = useState(false);
@@ -401,7 +497,7 @@ export default function App() {
 
     setKnowledgeSaveState({ status: "extracting" });
     setShowKnowledgePanel(true);
-    setKnowledgeSelectedIndices(new Set());
+    setKnowledgeSelectedIds(new Set());
 
     try {
       const candidates = await extractKnowledge(state.result.source, state.result.analysis, history);
@@ -414,9 +510,7 @@ export default function App() {
   const handleSaveSelectedKnowledge = async () => {
     if (state.status !== "success" || knowledgeSaveState.status !== "extracted") return;
 
-    const selectedCandidates = knowledgeSaveState.candidates.filter((_, i) =>
-      knowledgeSelectedIndices.has(i),
-    );
+    const selectedCandidates = knowledgeSaveState.candidates.filter((c) => knowledgeSelectedIds.has(c.id));
 
     if (selectedCandidates.length === 0) return;
 
@@ -426,11 +520,10 @@ export default function App() {
       const result = await saveKnowledge(state.result.source, selectedCandidates);
       setKnowledgeSaveState({
         status: "saved",
-        savedCount: result.savedCount,
-        skippedCount: result.skippedCount,
+        message: describeSaveResult(selectedCandidates, result.savedCount, result.skippedCount),
       });
       setShowKnowledgePanel(false);
-      setKnowledgeSelectedIndices(new Set());
+      setKnowledgeSelectedIds(new Set());
 
       // 大げさな画面遷移はせず、チャット画面上の小さなフィードバックのみ。数秒後に自動的に消す。
       setTimeout(() => {
@@ -645,15 +738,15 @@ export default function App() {
                         ? knowledgeSaveState.candidates
                         : []
                     }
-                    selectedIndices={knowledgeSelectedIndices}
-                    onToggleSelect={(i) => {
-                      const next = new Set(knowledgeSelectedIndices);
-                      if (next.has(i)) {
-                        next.delete(i);
+                    selectedIds={knowledgeSelectedIds}
+                    onToggleSelect={(id) => {
+                      const next = new Set(knowledgeSelectedIds);
+                      if (next.has(id)) {
+                        next.delete(id);
                       } else {
-                        next.add(i);
+                        next.add(id);
                       }
-                      setKnowledgeSelectedIndices(next);
+                      setKnowledgeSelectedIds(next);
                     }}
                     onSave={handleSaveSelectedKnowledge}
                     saving={knowledgeSaveState.status === "saving"}
@@ -671,11 +764,7 @@ export default function App() {
               )}
 
               {knowledgeSaveState.status === "saved" && (
-                <p className="success-message">
-                  {knowledgeSaveState.savedCount}件の理解を保存しました
-                  {knowledgeSaveState.skippedCount > 0 &&
-                    `（${knowledgeSaveState.skippedCount}件は既に保存済みのためスキップしました）`}
-                </p>
+                <p className="success-message">{knowledgeSaveState.message}</p>
               )}
             </section>
           )}

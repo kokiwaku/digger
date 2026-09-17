@@ -187,3 +187,104 @@ test("KnowledgeExtractionService supports an empty candidate list", async () => 
 
   assert.deepEqual(result.candidates, []);
 });
+
+test("KnowledgeExtractionService accepts a candidate with no relationToExisting (relation=new)", async () => {
+  const provider = fakeProvider(async () => JSON.stringify({ candidates: [validCandidate()] }));
+
+  const service = createVertexKnowledgeExtractionService(() => provider);
+  const result = await service.extract(validInput);
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].relationToExisting, undefined);
+  assert.equal(result.candidates[0].isNew, true);
+});
+
+test("KnowledgeExtractionService accepts a candidate with relationToExisting.type = reinforces", async () => {
+  const provider = fakeProvider(async () =>
+    JSON.stringify({
+      candidates: [
+        validCandidate({
+          isNew: false,
+          relationToExisting: { type: "reinforces", knowledgeId: "existing-1", reason: "同じ内容を別記事で再確認" },
+        }),
+      ],
+    }),
+  );
+
+  const service = createVertexKnowledgeExtractionService(() => provider);
+  const result = await service.extract(validInput);
+
+  assert.equal(result.candidates[0].relationToExisting?.type, "reinforces");
+  assert.equal(result.candidates[0].relationToExisting?.knowledgeId, "existing-1");
+});
+
+test("KnowledgeExtractionService accepts a candidate with relationToExisting.type = extends", async () => {
+  const provider = fakeProvider(async () =>
+    JSON.stringify({
+      candidates: [
+        validCandidate({
+          isNew: false,
+          relationToExisting: { type: "extends", knowledgeId: "existing-1", reason: "既存理解を前提にさらに深掘りした" },
+        }),
+      ],
+    }),
+  );
+
+  const service = createVertexKnowledgeExtractionService(() => provider);
+  const result = await service.extract(validInput);
+
+  assert.equal(result.candidates[0].relationToExisting?.type, "extends");
+});
+
+test("KnowledgeExtractionService accepts a candidate with relationToExisting.type = supersedes", async () => {
+  const provider = fakeProvider(async () =>
+    JSON.stringify({
+      candidates: [
+        validCandidate({
+          isNew: false,
+          relationToExisting: { type: "supersedes", knowledgeId: "existing-1", reason: "既存の理解が古かったため置き換え" },
+        }),
+      ],
+    }),
+  );
+
+  const service = createVertexKnowledgeExtractionService(() => provider);
+  const result = await service.extract(validInput);
+
+  assert.equal(result.candidates[0].relationToExisting?.type, "supersedes");
+});
+
+test("KnowledgeExtractionService retries when relationToExisting.type is an invalid value, then succeeds", async () => {
+  let callCount = 0;
+  const provider = fakeProvider(async () => {
+    callCount++;
+    if (callCount === 1) {
+      return JSON.stringify({
+        candidates: [validCandidate({ relationToExisting: { type: "not-a-real-relation" } })],
+      });
+    }
+    return JSON.stringify({ candidates: [validCandidate()] });
+  });
+
+  const service = createVertexKnowledgeExtractionService(() => provider);
+  const result = await service.extract(validInput);
+
+  assert.equal(callCount, 2);
+  assert.equal(result.candidates.length, 1);
+});
+
+test("KnowledgeExtractionService includes existingKnowledge ids in the prompt so relations can reference them", async () => {
+  let capturedPrompt = "";
+  const provider = fakeProvider(async (input: GenerateTextInput) => {
+    capturedPrompt = input.prompt;
+    return JSON.stringify({ candidates: [] });
+  });
+
+  const service = createVertexKnowledgeExtractionService(() => provider);
+  await service.extract({
+    ...validInput,
+    existingKnowledge: [{ id: "existing-knowledge-id-42", concept: "政策金利", statement: "既に知っている内容" }],
+  });
+
+  assert.ok(capturedPrompt.includes("existing-knowledge-id-42"));
+});

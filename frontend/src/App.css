@@ -391,6 +391,40 @@
   color: #888;
 }
 
+.knowledge-relation-hint {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: #2b6cb0;
+  font-style: italic;
+}
+
+.knowledge-category {
+  margin-bottom: 1.25rem;
+}
+
+.knowledge-category-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #444;
+}
+
+.knowledge-update-compare {
+  margin: 0.5rem 0 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.knowledge-update-line {
+  margin: 0.2rem 0;
+  color: #333;
+}
+
+.knowledge-update-label {
+  font-weight: 600;
+  color: #666;
+}
+
 .knowledge-loading {
   margin-top: 1.5rem;
 }

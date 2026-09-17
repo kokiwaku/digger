@@ -25,6 +25,24 @@ export const knowledgeExtractionInputSchema = z.object({
 });
 export type KnowledgeExtractionInput = z.infer<typeof knowledgeExtractionInputSchema>;
 
+// 新しいcandidateが既存Knowledgeに対してどういう関係にあるか。
+// - new: 既存Knowledgeにはない新しい理解
+// - reinforces: 既存Knowledgeとほぼ同じ理解を、別の文脈から再確認・強化している（表現違いレベル）
+// - extends: 既存Knowledgeを前提として、さらに理解が広がっている
+// - supersedes: 既存Knowledgeの内容が不正確または古く、今回の理解で置き換えるべき
+// 今回はこの関係を判定・保持するところまでで、自動でのKnowledge統合（merged/outdatedへの
+// 変更やstatement書き換え等）は行わない。
+export const knowledgeRelationSchema = z.enum(["new", "reinforces", "extends", "supersedes"]);
+export type KnowledgeRelation = z.infer<typeof knowledgeRelationSchema>;
+
+export const relationToExistingSchema = z.object({
+  type: knowledgeRelationSchema,
+  // 対応する既存Knowledgeのid（existingKnowledgeのUserKnowledge.id）。無理に紐付けられない場合は省略可。
+  knowledgeId: z.string().optional(),
+  reason: z.string().optional(),
+});
+export type RelationToExisting = z.infer<typeof relationToExistingSchema>;
+
 // LLMが実際に生成する候補の形。idはLLMに生成させず、サービス側でrandomUUID()を付与する
 // （一意性をLLMの出力に依存させないため）。
 export const knowledgeCandidateDraftSchema = z.object({
@@ -33,6 +51,8 @@ export const knowledgeCandidateDraftSchema = z.object({
   evidence: z.string(),
   confidence: z.enum(["low", "medium", "high"]),
   isNew: z.boolean(),
+  // 既存Knowledgeと意味的な関係がある場合のみ設定する。関連がなければ省略してよい。
+  relationToExisting: relationToExistingSchema.optional(),
 });
 export type KnowledgeCandidateDraft = z.infer<typeof knowledgeCandidateDraftSchema>;
 
