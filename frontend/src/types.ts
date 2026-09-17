@@ -41,9 +41,14 @@ export type ConversationTurn = {
   content: string;
 };
 
+export type RelatedConcept = {
+  name: string;
+  relation: string;
+};
+
 export type DeepDiveResponse = {
   answer: string;
-  relatedConcepts: string[];
+  relatedConcepts: RelatedConcept[];
   suggestedFollowUps: string[];
 };
 

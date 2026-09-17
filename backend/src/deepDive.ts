@@ -1,7 +1,5 @@
 import { deepDiveInputSchema, type DeepDiveInput, type DeepDiveResponse } from "./llm/deepDive.js";
-// LLMの実装を差し替えるときは、このimportを本物の実装に変えるだけでよい
-// （DeepDiveServiceインターフェースは変わらない想定）。
-import { mockDeepDiveService as deepDiveService } from "./llm/deepDive.mock.js";
+import { getDeepDiveService } from "./llm/deepDiveFactory.js";
 
 export function parseDeepDiveInput(body: unknown): DeepDiveInput {
   const result = deepDiveInputSchema.safeParse(body);
@@ -12,5 +10,5 @@ export function parseDeepDiveInput(body: unknown): DeepDiveInput {
 }
 
 export async function buildDeepDiveResponse(input: DeepDiveInput): Promise<DeepDiveResponse> {
-  return deepDiveService.ask(input);
+  return getDeepDiveService().ask(input);
 }

@@ -18,9 +18,15 @@ export const deepDiveInputSchema = z.object({
 });
 export type DeepDiveInput = z.infer<typeof deepDiveInputSchema>;
 
+const relatedConceptSchema = z.object({
+  name: z.string(),
+  // 今回の質問とどう関係するかの説明。単なるキーワード列挙にしないためのフィールド。
+  relation: z.string(),
+});
+
 export const deepDiveResponseSchema = z.object({
   answer: z.string(),
-  relatedConcepts: z.array(z.string()),
+  relatedConcepts: z.array(relatedConceptSchema),
   suggestedFollowUps: z.array(z.string()),
 });
 export type DeepDiveResponse = z.infer<typeof deepDiveResponseSchema>;
