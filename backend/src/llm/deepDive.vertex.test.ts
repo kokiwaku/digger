@@ -217,7 +217,7 @@ test("ask() prompt discourages forcing a mention of past understanding in every 
   assert.doesNotMatch(capturedInput.prompt, /必ず.*言及/);
 });
 
-test("ask() prompt instructs the model to answer concisely with a length/paragraph guideline", async () => {
+test("ask() system prompt defines length guidance per question type", async () => {
   let capturedInput: GenerateTextInput | undefined;
   const provider = fakeProvider(async (input) => {
     capturedInput = input;
@@ -228,9 +228,14 @@ test("ask() prompt instructs the model to answer concisely with a length/paragra
   await service.ask(baseInput());
 
   assert.ok(capturedInput);
-  assert.match(capturedInput.prompt, /300〜500文字程度/);
-  assert.match(capturedInput.prompt, /3〜5段落以内/);
-  assert.match(capturedInput.prompt, /まず結論を簡潔に/);
+  // 単純な事実質問
+  assert.match(capturedInput.systemPrompt ?? "", /150〜300文字程度/);
+  // 因果関係・仕組みの質問
+  assert.match(capturedInput.systemPrompt ?? "", /300〜500文字程度/);
+  assert.match(capturedInput.systemPrompt ?? "", /3〜5段落程度/);
+  // 詳細要求（明示的に求められた場合のみ長くしてよい）
+  assert.match(capturedInput.systemPrompt ?? "", /詳細要求/);
+  assert.match(capturedInput.systemPrompt ?? "", /求められた分だけ詳しく説明してよい/);
 });
 
 test("ask() prompt tells the model to stay within the scope of the question and leave room for follow-ups", async () => {
@@ -244,6 +249,22 @@ test("ask() prompt tells the model to stay within the scope of the question and 
   await service.ask(baseInput());
 
   assert.ok(capturedInput);
-  assert.match(capturedInput.prompt, /不要な背景説明や周辺知識まで広げすぎない/);
-  assert.match(capturedInput.prompt, /次の疑問が生まれる余白を残す/);
+  assert.match(capturedInput.systemPrompt ?? "", /質問された範囲を超えて説明を広げすぎない/);
+  assert.match(capturedInput.systemPrompt ?? "", /次の疑問が自然に生まれる余白を残す/);
+  assert.match(capturedInput.prompt, /質問された範囲を超えて周辺知識や背景まで広げすぎない/);
+});
+
+test("ask() prompt prioritizes a sufficient answer over a detailed one, without blurring information for brevity", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  await service.ask(baseInput());
+
+  assert.ok(capturedInput);
+  assert.match(capturedInput.systemPrompt ?? "", /「詳しい回答」より「今の疑問にちょうどよく答える」ことを優先/);
+  assert.match(capturedInput.systemPrompt ?? "", /短くするために情報を曖昧にしない/);
 });

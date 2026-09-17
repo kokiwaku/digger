@@ -60,6 +60,10 @@ export type RelationToExisting = {
   reason?: string;
 };
 
+// backendがrelationToExisting（LLMの生出力）から変換した、UI表示用のカテゴリ。
+// reinforces相当の候補は確認UIから除外されるため、ここには来ない。
+export type KnowledgeDisplayCategory = "new" | "deepened" | "updated";
+
 export type KnowledgeCandidate = {
   id: string;
   concept: string;
@@ -68,6 +72,8 @@ export type KnowledgeCandidate = {
   confidence: "low" | "medium" | "high";
   isNew: boolean;
   relationToExisting?: RelationToExisting;
+  displayCategory: KnowledgeDisplayCategory;
+  relatedKnowledge?: { concept: string; statement: string };
 };
 
 export type SavedKnowledge = {
