@@ -137,7 +137,7 @@ Content-Type: application/json
 
 ## 自分の理解ページ
 
-蓄積したKnowledgeをフラットな一覧としてではなく、「最近わかったこと」「トピックごとの広がり」「Knowledge同士のつながり」の3つの見方で眺められるページです。ヘッダーの「掘る」タブと並ぶ「自分の理解」タブから切り替えられます（`frontend/src/App.tsx`の`view`ステートによる単純な画面切り替えで、ルーティングライブラリは使っていません）。
+蓄積したKnowledgeをフラットな一覧としてではなく、「最近わかったこと」「トピックごとの広がり」「Knowledge同士のつながり」の3つの見方で眺められるページです。「掘る」「自分の理解」は上部タブではなく左側の固定サイドバー（モバイルは下部固定のBottom Navigation）から切り替え、`react-router-dom`によるURLルーティング（`/dig`・`/understanding/recent`・`/understanding/topic`・`/understanding/map`）を導入しているため、直接アクセス・リロード・ブラウザの戻る/進むにも対応しています（詳細は[`frontend/README.md`](frontend/README.md)を参照）。
 
 - **最近タブ**: 保存済みKnowledgeを`createdAt`の新しい順に「今日」「昨日」などの日付でグルーピングして表示します。各カードをクリックすると、概念・説明・理解した日・状態・元の記事・関連する理解をモーダルで確認できます（既存のKnowledgeスキーマにあるデータのみを表示し、新しいデータは作っていません）。
 - **トピックタブ**: 各Knowledgeが持つ`topicPath`（最大3階層のトピックの配列、例: `["経済", "金融政策", "政策金利"]`）をもとに、テーマ別の階層ツリーとして表示します。`topicPath`が未付与のKnowledgeは`GET /api/knowledge`が呼ばれたタイミングでバックエンドがまとめてLLM（Vertex AI Gemini。詳細は[`backend/README.md`](backend/README.md)を参照）に分類させ、以後はDBに保存された値を使い回します（毎回全件を送り直すことはありません）。

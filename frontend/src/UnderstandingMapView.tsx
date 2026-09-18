@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ReactFlow, {
   Background,
   Controls,
@@ -152,6 +153,15 @@ function isRecentlyChanged(concept: UnderstandingConcept, knowledgeItems: SavedK
   const now = Date.now();
   if (now - new Date(concept.createdAt).getTime() <= WEEK_MS) return true;
   return knowledgeItems.some((k) => now - new Date(k.createdAt).getTime() <= WEEK_MS);
+}
+
+// Mapは俯瞰用のUIなので、node内のlabelは原則1〜2行に収まる文字数に短縮する
+// （3〜4行に折り返されて読みにくいというユーザー指摘への対応）。フルテキストは
+// ConceptNode.tsx側でtitle属性（hover tooltip）として保持し、詳細パネルでも確認できる。
+const CONCEPT_LABEL_MAX_CHARS = 12;
+
+function truncateLabel(text: string, max = CONCEPT_LABEL_MAX_CHARS): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 const RELATION_TYPE_LABEL: Record<ConceptRelationType, string> = {
@@ -396,13 +406,12 @@ function ConceptDetailPanel({
 
 export default function UnderstandingMapView({
   knowledge,
-  onGoDig,
   initialTopicName,
 }: {
   knowledge: SavedKnowledge[];
-  onGoDig: () => void;
   initialTopicName?: string | null;
 }) {
+  const navigate = useNavigate();
   const [mapState, setMapState] = useState<MapFetchState>({ status: "loading" });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
@@ -586,11 +595,13 @@ export default function UnderstandingMapView({
       const clusterKey = getClusterKey(concept, topics);
       const data: ConceptNodeData = {
         name: concept.name,
+        label: truncateLabel(concept.name),
         knowledgeCount: knowledgeItems.length,
         color: topicColorMap.get(clusterKey) ?? "#2b6cb0",
         isNew: isRecentlyChanged(concept, knowledgeItems),
         dimmed: false,
         highlighted: false,
+        selected: false,
         radius: computeConceptRadius(degree),
       };
       newNodes.push({ id: concept._id, type: "concept", position: pos, data });
@@ -625,12 +636,16 @@ export default function UnderstandingMapView({
   }, [hoveredNodeId, edges]);
 
   const displayNodes = useMemo(() => {
-    if (!neighborIds) return nodes;
     return nodes.map((n) => {
-      const highlighted = neighborIds.has(n.id);
-      return { ...n, data: { ...n.data, highlighted, dimmed: !highlighted } };
+      const highlighted = neighborIds ? neighborIds.has(n.id) : false;
+      const dimmed = neighborIds ? !highlighted : false;
+      if (n.type === "concept") {
+        const selected = n.id === selectedConceptId;
+        return { ...n, data: { ...n.data, highlighted, dimmed, selected } };
+      }
+      return { ...n, data: { ...n.data, highlighted, dimmed } };
     });
-  }, [nodes, neighborIds]);
+  }, [nodes, neighborIds, selectedConceptId]);
 
   const displayEdges = useMemo(() => {
     if (!hoveredNodeId) return edges;
@@ -794,6 +809,11 @@ export default function UnderstandingMapView({
             }}
             fitView
             minZoom={0.1}
+            // デフォルトのautoPanOnNodeDrag（nodeをpaneの端近くまでドラッグすると
+            // 自動でpan/zoomして追従する挙動）を無効化する。Map領域が狭い場合
+            // （詳細パネル表示中など）、この自動追従がズームを大きく変えてしまい、
+            // 「視覚的な安定感を優先する」という方針と相容れないため。
+            autoPanOnNodeDrag={false}
             proOptions={{ hideAttribution: true }}
           >
             <Background />
@@ -802,35 +822,42 @@ export default function UnderstandingMapView({
           </ReactFlow>
         </div>
 
-        {selectedConcept && (
-          <>
-            <div
-              className={mobileDetailOpen ? "map-mobile-backdrop" : "map-mobile-backdrop map-mobile-backdrop-hidden"}
-              onClick={handleCloseDetail}
+        {/* 詳細パネルの列は選択の有無に関わらず常に確保する（幅を固定し、Mapの表示幅が
+            選択のたびにガクッと変わらないようにするため）。未選択時は軽いプレースホルダーを表示する。
+            モバイルではCSS側でこの列自体を非表示にし、選択時だけ下からのシートとして表示する。 */}
+        <div
+          className={mobileDetailOpen ? "map-mobile-backdrop" : "map-mobile-backdrop map-mobile-backdrop-hidden"}
+          onClick={handleCloseDetail}
+        />
+        <div
+          className={
+            selectedConcept && mobileDetailOpen
+              ? "concept-detail-panel-wrapper map-mobile-open"
+              : "concept-detail-panel-wrapper"
+          }
+        >
+          {selectedConcept ? (
+            <ConceptDetailPanel
+              concept={selectedConcept}
+              topics={topics}
+              concepts={activeConcepts}
+              relations={relations}
+              knowledgeItems={selectedConceptKnowledge}
+              onClose={handleCloseDetail}
+              onSelectConcept={handleSelectConcept}
             />
-            <div
-              className={
-                mobileDetailOpen ? "concept-detail-panel-wrapper map-mobile-open" : "concept-detail-panel-wrapper"
-              }
-            >
-              <ConceptDetailPanel
-                concept={selectedConcept}
-                topics={topics}
-                concepts={activeConcepts}
-                relations={relations}
-                knowledgeItems={selectedConceptKnowledge}
-                onClose={handleCloseDetail}
-                onSelectConcept={handleSelectConcept}
-              />
+          ) : (
+            <div className="concept-detail-placeholder">
+              <p>Conceptを選択すると、ここに詳細が表示されます。</p>
             </div>
-          </>
-        )}
+          )}
+        </div>
       </div>
 
       {activeConcepts.length <= 2 && (
         <p className="map-small-state-hint">
           少しずつConceptが増えていきます。気になる記事を掘ってみましょう。
-          <button type="button" className="topic-node-map-link" onClick={onGoDig}>
+          <button type="button" className="topic-node-map-link" onClick={() => navigate("/dig")}>
             記事を掘る →
           </button>
         </p>

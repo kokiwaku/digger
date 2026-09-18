@@ -1,33 +1,72 @@
-.page {
+/* AppShell: 左Navigation（サイドバー/モバイルはボトムナビ）は常にマウントされたまま、
+   右のMain Contentだけがrouteに応じて切り替わる。Navigation側の幅・位置は変化しないため、
+   画面切り替え時のガタつきを避けられる。 */
+.app-shell {
+  display: flex;
   min-height: 100vh;
-  box-sizing: border-box;
-  padding: 2rem 1.25rem 4rem;
-  max-width: 640px;
-  margin: 0 auto;
   font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
   color: #1a1a1a;
+}
+
+.app-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 2rem 1.5rem;
+  border-right: 1px solid #eee;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+/* Main Contentは常に同じ最大幅を持ち、routeが変わっても外枠のサイズを変えない
+   （中身の狭さ・広さはページ側（.dig-page-inner等）で個別に調整する）。 */
+.app-main {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 2rem 1.5rem 4rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* 「掘る」画面だけは、会話中心の読みやすい狭い列に収める。 */
+.dig-page-inner {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.app-bottom-nav {
+  display: none;
+}
+
+.app-mobile-header {
+  display: none;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   margin: 0 0 0.25rem;
-  font-size: 1.75rem;
+  font-size: 1.4rem;
   letter-spacing: 0.02em;
 }
 
 .brand-icon {
-  width: 64px;
-  height: 64px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
   flex-shrink: 0;
 }
 
 .tagline {
-  margin: 0 0 2rem;
+  margin: 0 0 1.5rem;
   color: #666;
-  font-size: 0.95rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 
 .dig-form {
@@ -439,30 +478,74 @@
   font-size: 0.9rem;
 }
 
-/* ヘッダーの「掘る」/「自分の理解」ナビゲーション。大規模なNavigation設計は不要なため、
-   タブに近いシンプルな見た目にする。 */
-.main-nav {
+/* サイドバーの「掘る」/「自分の理解」ナビゲーション。大規模なNavigation設計は不要なため、
+   主張しすぎない控えめな強調（背景色）にとどめる。 */
+.app-nav {
   display: flex;
-  gap: 1.25rem;
-  margin-bottom: 1.5rem;
-  border-bottom: 1px solid #eee;
+  flex-direction: column;
+  gap: 0.2rem;
 }
 
-.main-nav-link {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 0.5rem 0.1rem;
-  font: inherit;
-  font-size: 0.95rem;
+.app-nav-link {
+  display: block;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.92rem;
   font-weight: 600;
-  color: #888;
-  cursor: pointer;
+  color: #777;
+  text-decoration: none;
 }
 
-.main-nav-link.active {
+.app-nav-link.active {
+  background: #f2f2f2;
   color: #1a1a1a;
-  border-bottom-color: #1a1a1a;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .app-sidebar {
+    display: none;
+  }
+
+  .app-mobile-header {
+    display: flex;
+    padding: 1.25rem 1.25rem 0;
+    font-size: 1.25rem;
+  }
+
+  .app-main {
+    max-width: none;
+    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .app-bottom-nav {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    background: #fff;
+    border-top: 1px solid #eee;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .app-bottom-nav-link {
+    flex: 1;
+    text-align: center;
+    padding: 0.6rem 0 0.5rem;
+    font-size: 0.78rem;
+    color: #888;
+    text-decoration: none;
+  }
+
+  .app-bottom-nav-link.active {
+    color: #1a1a1a;
+    font-weight: 700;
+  }
 }
 
 /* 「自分の理解」ページ全体。管理画面然とならないよう、余白を広めに取る。 */
@@ -505,6 +588,7 @@
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  max-width: 720px;
 }
 
 /* 「最近」ビュー */
@@ -642,12 +726,10 @@
   overflow: hidden;
 }
 
-/* 「自分の理解」ページを開いているときだけ、Map用の3ペインレイアウトが収まるよう
-   コンテナを広げる（他の画面は既存の640pxの会話中心レイアウトのまま）。 */
-.page-wide {
-  max-width: 1100px;
-}
-
+/* 「マップ」は3ペインUIのため.app-mainの最大幅（1100px）をそのまま使う
+   （「最近」「トピック」用の.understanding-viewのmax-widthを打ち消す）。
+   外枠のサイズは.app-mainが管理しているため、route切り替え時にページ全体の
+   幅は変わらない（中身の広さだけがタブごとに異なる）。 */
 .understanding-view-map {
   max-width: none;
 }
@@ -807,7 +889,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   word-break: break-word;
 }
@@ -830,6 +912,12 @@
   opacity: 0.25;
 }
 
+/* クリックして詳細パネルを開いたConceptを、hoverのhighlightedとは別に
+   控えめなアウトリングで示す（派手にしすぎない）。 */
+.concept-node-selected {
+  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.25);
+}
+
 .concept-node-badge {
   position: absolute;
   top: -6px;
@@ -843,16 +931,18 @@
   line-height: 1.4;
 }
 
-/* Topic hub node（React FlowのCustom Node、TopicNode.tsx）。ConceptNodeより大きく、
-   塗りつぶし気味の円にすることで「Topic=大きな理解領域」を視覚的に主張する。
-   Topic->ConceptのedgeがこのnodeとConcept nodeを直接結ぶため、親子関係が線で見える。 */
+/* Topic hub node（React FlowのCustom Node、TopicNode.tsx）。
+   DiggerではConceptが「Map上の具体的なnode」、Topicは「理解領域のまとまり」という
+   役割分担のため、Topicが前景のConceptと同格に見えないよう、薄い塗り・細い破線の
+   境界線で「背景・グルーピング」寄りの控えめな見た目にする（矢印付きedgeによる
+   親子関係の可視化は維持しつつ、視覚的な主張だけを弱める）。 */
 .topic-hub-node {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  border: 2px solid #2b6cb0;
+  border: 1.5px dashed #2b6cb0;
   text-align: center;
   padding: 0.3rem;
   cursor: pointer;
@@ -863,26 +953,28 @@
 }
 
 .topic-hub-node-name {
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-size: 0.68rem;
+  font-weight: 600;
   line-height: 1.2;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   word-break: break-word;
+  opacity: 0.85;
 }
 
 .topic-hub-node-highlighted {
-  border-width: 3px;
-  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.3);
+  border-style: solid;
+  border-width: 2px;
+  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.25);
   z-index: 2;
 }
 
 .topic-hub-node-dimmed {
-  opacity: 0.3;
+  opacity: 0.2;
 }
 
 .concept-detail-panel-wrapper {
@@ -897,6 +989,21 @@
   padding: 1rem;
   height: 560px;
   overflow-y: auto;
+}
+
+/* Conceptが未選択のとき、詳細パネルの列自体は幅を保ったまま軽いプレースホルダーを表示する
+   （選択の有無でMapの表示幅がガクッと変わらないようにするため）。 */
+.concept-detail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 560px;
+  border: 1px dashed #eee;
+  border-radius: 10px;
+  padding: 1rem;
+  text-align: center;
+  color: #999;
+  font-size: 0.85rem;
 }
 
 .concept-detail-header {

@@ -21,7 +21,7 @@ export default function TopicNode({ data }: NodeProps<TopicNodeData>) {
         width: size,
         height: size,
         borderColor: data.color,
-        background: `${data.color}22`,
+        background: `${data.color}12`,
       }}
       title={data.name}
     >

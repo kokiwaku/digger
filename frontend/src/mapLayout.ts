@@ -73,7 +73,10 @@ export type Point = { x: number; y: number };
 // 最終座標そのものではない（各クラスタ内部の配置はforceLink/forceManyBody/forceCollideが決める）。
 export function computeClusterCenters(clusterKeys: string[]): Map<string, Point> {
   const clusterCount = Math.max(clusterKeys.length, 1);
-  const radius = Math.max(260, clusterCount * 130);
+  // クラスタ間の距離を広げすぎると「1つの理解マップ」ではなく孤立した島の集まりに
+  // 見えてしまう（ユーザー指摘）。node同士の重なりはforceCollideが防ぐため、
+  // ここでの半径は控えめにとどめる。
+  const radius = Math.max(140, clusterCount * 65);
   const angleStep = (2 * Math.PI) / clusterCount;
 
   const centers = new Map<string, Point>();
@@ -96,9 +99,11 @@ export function computeConceptRadius(degree: number): number {
 
 // Topic hub nodeの半径。root Topicほど大きく、深い階層ほど小さくする
 // （「Topic=大きな理解領域、Concept=具体的な対象」という主従関係を大きさでも表現する）。
+// ただしConceptと同格の「もう1種類のConcept」に見えないよう、Concept nodeの平均的な
+// サイズ（30〜48程度）から大きく飛び抜けすぎない範囲に抑える。
 export function computeTopicRadius(depth: number, directConceptCount: number): number {
-  const base = depth === 0 ? 46 : depth === 1 ? 38 : 32;
-  return base + Math.min(directConceptCount, 6) * 1.5;
+  const base = depth === 0 ? 40 : depth === 1 ? 34 : 28;
+  return base + Math.min(directConceptCount, 6) * 1.2;
 }
 
 export type ForceNodeKind = "topic" | "concept";
@@ -132,22 +137,22 @@ const SIMULATION_TICKS = 300;
 function linkDistance(kind: ForceLinkKind): number {
   switch (kind) {
     case "topicParent":
-      return 90;
+      return 65;
     case "topicConcept":
-      return 110;
+      return 85;
     case "conceptRelation":
-      return 170;
+      return 130;
   }
 }
 
 function linkStrength(kind: ForceLinkKind): number {
   switch (kind) {
     case "topicParent":
-      return 0.6;
+      return 0.65;
     case "topicConcept":
-      return 0.45;
+      return 0.5;
     case "conceptRelation":
-      return 0.25;
+      return 0.22;
   }
 }
 
@@ -193,22 +198,25 @@ export function computeForceLayout(
         .distance((d) => linkDistance((d as unknown as ForceLinkInput).kind))
         .strength((d) => linkStrength((d as unknown as ForceLinkInput).kind)),
     )
-    // 反発を強めにして、node同士が密集して「どのedgeがどれを繋いでいるか分からない」
-    // 状態を避ける（ユーザー指摘: node同士が近すぎる）。
-    .force("charge", forceManyBody().strength(-260))
+    // 反発はnode同士の重なり防止に必要な最小限にとどめる（強すぎるとクラスタが
+    // 孤立した島のように離れてしまう、というユーザー指摘への対応）。重なり防止自体は
+    // forceCollideが担う。
+    .force("charge", forceManyBody().strength(-170))
     .force(
       "collide",
-      forceCollide<SimNode>().radius((d) => d.radius + 16),
+      forceCollide<SimNode>().radius((d) => d.radius + 10),
     )
     .force(
       "clusterX",
-      forceX<SimNode>((d) => clusterCenters.get(d.clusterKey)?.x ?? 0).strength(0.05),
+      forceX<SimNode>((d) => clusterCenters.get(d.clusterKey)?.x ?? 0).strength(0.07),
     )
     .force(
       "clusterY",
-      forceY<SimNode>((d) => clusterCenters.get(d.clusterKey)?.y ?? 0).strength(0.05),
+      forceY<SimNode>((d) => clusterCenters.get(d.clusterKey)?.y ?? 0).strength(0.07),
     )
-    .force("center", forceCenter(0, 0).strength(0.02))
+    // 全体を中心へ寄せる力を強めにし、クラスタ同士が完全に分断されず
+    // 「1つのマップ」として見えるようにする。
+    .force("center", forceCenter(0, 0).strength(0.05))
     .stop();
 
   for (let i = 0; i < SIMULATION_TICKS; i++) {
