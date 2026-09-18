@@ -24,5 +24,21 @@ export const knowledgeSourceSchema = z.discriminatedUnion("type", [
     type: z.literal("image"),
     title: z.string().optional(),
   }),
+  // 「自分の理解」画面（Understanding Map）のConceptを起点に、そのConceptについて
+  // 改めてDeep Diveしたセッションから保存されたKnowledge。外部からの入力
+  // （URL/text/image）ではなく、既に理解済みのConceptから「さらに掘る」循環に由来する。
+  // conceptIdは掘った時点のConceptを指すが、後からConceptが削除・統合される可能性が
+  // あるため、titleにConcept名のスナップショットを残す（表示用のfallback）。
+  z.object({
+    type: z.literal("concept_dig"),
+    conceptId: z.string(),
+    title: z.string().optional(),
+  }),
+  // 同上のTopic版。Topicの配下Concept・Knowledgeをまとめて俯瞰しながら掘ったセッション。
+  z.object({
+    type: z.literal("topic_dig"),
+    topicId: z.string(),
+    title: z.string().optional(),
+  }),
 ]);
 export type KnowledgeSource = z.infer<typeof knowledgeSourceSchema>;

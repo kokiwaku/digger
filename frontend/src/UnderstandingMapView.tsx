@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import ReactFlow, {
   Background,
   Controls,
@@ -287,6 +287,7 @@ function TopicDetailPanel({
   onClose,
   onSelectConcept,
   onSelectTopic,
+  onDigTopic,
 }: {
   topic: Topic;
   topics: Topic[];
@@ -294,6 +295,7 @@ function TopicDetailPanel({
   onClose: () => void;
   onSelectConcept: (id: string) => void;
   onSelectTopic: (id: string) => void;
+  onDigTopic: (topicId: string) => void;
 }) {
   const breadcrumb = buildTopicBreadcrumb(topics, topic._id);
   const childTopics = useMemo(
@@ -344,6 +346,10 @@ function TopicDetailPanel({
           ))}
         </ul>
       )}
+
+      <button type="button" className="dig-button entity-dig-cta" onClick={() => onDigTopic(topic._id)}>
+        このトピックを掘る
+      </button>
     </div>
   );
 }
@@ -357,6 +363,7 @@ function ConceptDetailPanel({
   onClose,
   onSelectConcept,
   onSelectKnowledge,
+  onDigConcept,
 }: {
   concept: UnderstandingConcept;
   topics: Topic[];
@@ -366,6 +373,7 @@ function ConceptDetailPanel({
   onClose: () => void;
   onSelectConcept: (conceptId: string) => void;
   onSelectKnowledge: (knowledgeId: string) => void;
+  onDigConcept: (conceptId: string) => void;
 }) {
   const conceptById = useMemo(() => new Map(concepts.map((c) => [c._id, c])), [concepts]);
   const breadcrumb = concept.topicIds[0] ? buildTopicBreadcrumb(topics, concept.topicIds[0]) : [];
@@ -440,6 +448,10 @@ function ConceptDetailPanel({
           </ul>
         </>
       )}
+
+      <button type="button" className="dig-button entity-dig-cta" onClick={() => onDigConcept(concept._id)}>
+        このConceptを掘る
+      </button>
     </div>
   );
 }
@@ -513,6 +525,7 @@ export default function UnderstandingMapView({
   initialTopicName?: string | null;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [mapState, setMapState] = useState<MapFetchState>({ status: "loading" });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   // Topicのボタンは最初はルートTopicを5個までしか出さず（増えすぎると場所を取るため）、
@@ -570,6 +583,24 @@ export default function UnderstandingMapView({
     if (match) setSelectedTopicId(findRootTopicId(mapState.topics, match._id));
     appliedInitialTopicRef.current = true;
   }, [mapState, initialTopicName]);
+
+  // Concept/Topic起点のDeep Dive画面（EntityDigPage.tsx）から「理解マップへ戻る」で
+  // 戻ってきた場合、そのnavigate stateにあるrestoreTopicId/restoreConceptIdでMap側の
+  // 絞り込み・選択状態を復元する（「Map→Conceptを選ぶ→掘る→Knowledge保存→Mapへ戻る→
+  // 理解構造が更新されている」という循環体験のうち、戻った後に元の場所を保つ部分）。
+  const appliedRestoreStateRef = useRef(false);
+  useEffect(() => {
+    if (appliedRestoreStateRef.current) return;
+    if (mapState.status !== "success") return;
+    const state = location.state as { restoreTopicId?: string | null; restoreConceptId?: string | null } | null;
+    if (!state) return;
+    appliedRestoreStateRef.current = true;
+    if (state.restoreTopicId) setSelectedTopicId(state.restoreTopicId);
+    if (state.restoreConceptId) {
+      setSelectedNode({ kind: "concept", id: state.restoreConceptId });
+      setPendingFocusId(state.restoreConceptId);
+    }
+  }, [mapState, location.state]);
 
   // 「/」またはCmd/Ctrl+Kで検索欄にフォーカス、Escで閉じる（必須ではないが、決め打ちで
   // 検索したいユーザー向けのショートカット）。
@@ -952,6 +983,17 @@ export default function UnderstandingMapView({
     setMobileDetailOpen(false);
   }
 
+  // 「このConceptを掘る」「このTopicを掘る」。Diggerの循環体験（Map→Conceptを選ぶ→掘る→
+  // Knowledge保存→Mapへ戻る）の入口。現在のTopicフィルタ（selectedTopicId）をnavigate stateへ
+  // 積んでおき、EntityDigPage側の「理解マップへ戻る」で同じ絞り込みへ戻れるようにする。
+  function handleDigConcept(conceptId: string) {
+    navigate(`/dig/concept/${conceptId}`, { state: { returnTopicId: selectedTopicId } });
+  }
+
+  function handleDigTopic(topicId: string) {
+    navigate(`/dig/topic/${topicId}`, { state: { returnTopicId: selectedTopicId } });
+  }
+
   async function handleRefresh() {
     setRefreshing(true);
     setRefreshError(null);
@@ -1167,6 +1209,7 @@ export default function UnderstandingMapView({
               onClose={handleCloseDetail}
               onSelectConcept={(id) => focusNode({ kind: "concept", id })}
               onSelectKnowledge={(id) => focusNode({ kind: "knowledge", id })}
+              onDigConcept={handleDigConcept}
             />
           ) : selectedTopic ? (
             <TopicDetailPanel
@@ -1176,6 +1219,7 @@ export default function UnderstandingMapView({
               onClose={handleCloseDetail}
               onSelectConcept={(id) => focusNode({ kind: "concept", id })}
               onSelectTopic={(id) => focusNode({ kind: "topic", id })}
+              onDigTopic={handleDigTopic}
             />
           ) : selectedKnowledge ? (
             <KnowledgeDetailPanel

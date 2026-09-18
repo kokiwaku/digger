@@ -288,3 +288,38 @@ test("KnowledgeExtractionService includes existingKnowledge ids in the prompt so
 
   assert.ok(capturedPrompt.includes("existing-knowledge-id-42"));
 });
+
+test("KnowledgeExtractionService formats a concept_dig source correctly (does not mislabel it as image input)", async () => {
+  let capturedPrompt = "";
+  const provider = fakeProvider(async (input: GenerateTextInput) => {
+    capturedPrompt = input.prompt;
+    return JSON.stringify({ candidates: [] });
+  });
+
+  const service = createVertexKnowledgeExtractionService(() => provider);
+  await service.extract({
+    ...validInput,
+    source: { type: "concept_dig", conceptId: "concept-1", title: "MI6" },
+  });
+
+  assert.ok(capturedPrompt.includes("MI6"));
+  assert.ok(capturedPrompt.includes("Concept"));
+  assert.ok(!capturedPrompt.includes("画像入力"));
+});
+
+test("KnowledgeExtractionService formats a topic_dig source correctly", async () => {
+  let capturedPrompt = "";
+  const provider = fakeProvider(async (input: GenerateTextInput) => {
+    capturedPrompt = input.prompt;
+    return JSON.stringify({ candidates: [] });
+  });
+
+  const service = createVertexKnowledgeExtractionService(() => provider);
+  await service.extract({
+    ...validInput,
+    source: { type: "topic_dig", topicId: "topic-1", title: "情報・インテリジェンス" },
+  });
+
+  assert.ok(capturedPrompt.includes("情報・インテリジェンス"));
+  assert.ok(capturedPrompt.includes("Topic"));
+});

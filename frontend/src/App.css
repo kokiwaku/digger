@@ -246,6 +246,33 @@
   text-decoration: underline;
 }
 
+/* Concept/Topicを起点に掘る画面（EntityDigPage.tsx）のヘッダー。通常の記事ヘッダー
+   （タイトル+URL）とは違い、見出し（例:「MI6について掘る」）＋「理解マップへ戻る」の
+   軽いリンクだけで構成する。 */
+.entity-dig-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.entity-dig-back {
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Concept/Topic Detail Panel下部の「このConceptを掘る」「このTopicを掘る」CTA。
+   保存する等の主要アクションと同じ見た目（.dig-button）を使うが、パネル内の他要素との
+   余白を確保するため上にmarginを足す。 */
+.entity-dig-cta {
+  display: block;
+  width: 100%;
+  margin-top: 1rem;
+  text-align: center;
+}
+
 .section-label {
   margin: 0 0 0.5rem;
   font-size: 0.8rem;
