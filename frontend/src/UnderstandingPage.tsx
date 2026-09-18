@@ -212,7 +212,10 @@ function layoutNodesByTopic(items: SavedKnowledge[], colorMap: Record<string, st
 
   const topics = Array.from(groups.keys());
   const clusterCount = Math.max(topics.length, 1);
-  const clusterRadius = Math.max(220, clusterCount * 90);
+  // クラスタ数が増えるほど外周円の半径をむやみに大きくすると、ReactFlowのfitViewが
+  // デフォルトのminZoom（0.5）までしか縮小できずノードが画面外にはみ出す。
+  // トピック数が増えても縮小しすぎない程度に緩やかに広げるだけにとどめる。
+  const clusterRadius = Math.max(160, clusterCount * 55);
   const clusterAngleStep = (2 * Math.PI) / clusterCount;
 
   const nodes: Node[] = [];
@@ -395,6 +398,7 @@ function KnowledgeMap({
             if (item) onSelect(item);
           }}
           fitView
+          minZoom={0.1}
           proOptions={{ hideAttribution: true }}
         >
           <Background />

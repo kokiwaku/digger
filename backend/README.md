@@ -414,6 +414,24 @@ services:
 | `npm run build` | `tsc -p tsconfig.json` — `dist/` にコンパイル（`*.test.ts` は除外） |
 | `npm start` | `node dist/index.js` — ビルド済みファイルを実行（本番想定） |
 | `npm test` | `tsx --test src/*.test.ts src/llm/*.test.ts src/llm/provider/*.test.ts` — Node.js標準の`node:test`ランナーでユニットテストを実行。**Vertex AIへの実際の通信は行わない**（`classifyVertexError`等の純粋関数のみテスト） |
+| `npm run seed:demo` | `scripts/seedDemoKnowledge.ts` — 「自分の理解」ページ（最近／トピック／マップ）を、実際に何十件も記事を掘らずにそれらしいボリュームで確認するための開発用シードスクリプト。詳細は下記。 |
+
+### `npm run seed:demo`（開発用デモKnowledgeの投入）
+
+気候変動・宇宙・脳科学・AI・半導体・歴史・経済など複数分野にまたがる18件のKnowledgeを`user_knowledge`コレクションへ直接投入します（実際のdig→深掘り→Knowledge Extractionのフローは通しません）。
+
+```bash
+# Docker Compose環境なら、backendコンテナ内で実行
+docker compose exec backend npm run seed:demo
+
+# 既存のKnowledgeを全部消してから入れ直したい場合
+docker compose exec backend sh -c "RESET_DEMO_KNOWLEDGE=1 npm run seed:demo"
+```
+
+- **何度でも安全に再実行できます**: 各itemは連番から決定的に生成した`_id`を持つため、再実行しても重複せず（`updateOne(..., { upsert: true })`）、`createdAt`が実行時点からの相対日数で更新されるだけです。
+- **`topicPath`は意図的に付与しません**。既存の遅延分類の仕組み（`assignTopicsToUnclassified()`）にそのまま乗せるため、投入後にfrontendで「自分の理解」を開く（または`GET /api/knowledge`を叩く）と、未分類分がまとめて1回のLLM呼び出しで分類されます。
+- 一部のitemには`relationsOut`（`extends`）を持たせてあり、マップビューで辺のあるKnowledgeとないKnowledgeの両方を確認できます。
+- 本番運用や認証実装後に誤って使われないよう、`FIXED_USER_ID`（`local-user`）にのみ投入する開発用スクリプトです。
 
 ## 依存関係
 
