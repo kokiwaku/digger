@@ -843,6 +843,48 @@
   line-height: 1.4;
 }
 
+/* Topic hub node（React FlowのCustom Node、TopicNode.tsx）。ConceptNodeより大きく、
+   塗りつぶし気味の円にすることで「Topic=大きな理解領域」を視覚的に主張する。
+   Topic->ConceptのedgeがこのnodeとConcept nodeを直接結ぶため、親子関係が線で見える。 */
+.topic-hub-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid #2b6cb0;
+  text-align: center;
+  padding: 0.3rem;
+  cursor: pointer;
+  transition:
+    opacity 0.15s ease,
+    box-shadow 0.15s ease,
+    border-width 0.15s ease;
+}
+
+.topic-hub-node-name {
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.topic-hub-node-highlighted {
+  border-width: 3px;
+  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.3);
+  z-index: 2;
+}
+
+.topic-hub-node-dimmed {
+  opacity: 0.3;
+}
+
 .concept-detail-panel-wrapper {
   width: 320px;
   flex-shrink: 0;

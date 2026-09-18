@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
+  MarkerType,
   MiniMap,
   useEdgesState,
   useNodesState,
@@ -12,14 +13,17 @@ import "reactflow/dist/style.css";
 import type { ConceptRelation, ConceptRelationType, SavedKnowledge, Topic, UnderstandingConcept } from "./types";
 import { STATUS_LABELS, effectiveStatus, statusClassName } from "./UnderstandingPage";
 import ConceptNode, { type ConceptNodeData } from "./ConceptNode";
+import TopicNode, { type TopicNodeData } from "./TopicNode";
 import {
   UNCLASSIFIED_CLUSTER,
   buildTopicColorMap,
   computeClusterCenters,
-  computeClusterLabelPositions,
   computeConceptDegree,
   computeConceptRadius,
   computeForceLayout,
+  computeTopicDepth,
+  computeTopicRadius,
+  findRootTopicId,
   getClusterKey,
   type ForceLinkInput,
   type ForceNodeInput,
@@ -28,8 +32,7 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 
-const NODE_TYPES = { concept: ConceptNode };
-const CLUSTER_LABEL_PREFIX = "cluster-label-";
+const NODE_TYPES = { concept: ConceptNode, topic: TopicNode };
 const MINIMAP_THRESHOLD = 15;
 
 type UnderstandingMapData = {
@@ -163,6 +166,8 @@ const RELATION_TYPE_LABEL: Record<ConceptRelationType, string> = {
 
 // relation typeを色分けで複雑化せず、edgeが「つながっている」ことが分かる程度の
 // 控えめな単色＋小さなラベルにとどめる（hover時のみ強調、UnderstandingMapView側で処理）。
+// 矢印（markerEnd）を付け、fromConceptId→toConceptIdの向き（例:「深掘り」ならfromがtoの
+// 理解をさらに広げた側）が見て分かるようにする。
 function buildConceptEdges(relations: ConceptRelation[], visibleIds: Set<string>): Edge[] {
   return relations
     .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
@@ -171,9 +176,63 @@ function buildConceptEdges(relations: ConceptRelation[], visibleIds: Set<string>
       source: r.fromConceptId,
       target: r.toConceptId,
       label: RELATION_TYPE_LABEL[r.type],
-      style: { stroke: "#ddd" },
-      labelStyle: { fontSize: 10, fill: "#aaa" },
+      style: { stroke: "#ccc" },
+      labelStyle: { fontSize: 10, fill: "#999" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#ccc", width: 14, height: 14 },
     }));
+}
+
+// Topicの親子関係（parentId）とTopic→Conceptの所属関係を、それぞれ別のedge kindとして
+// 生成する。ConceptRelation（意味的な関係）とは見た目を変え、細く控えめな線＋矢印にする
+// ことで「これは階層構造のedgeだ」と直感的に区別できるようにする。
+function buildHierarchyEdges(
+  topicParentLinks: { source: string; target: string }[],
+  topicConceptLinks: { source: string; target: string }[],
+): Edge[] {
+  const edges: Edge[] = [];
+  for (const link of topicParentLinks) {
+    edges.push({
+      id: `topic-parent-${link.source}-${link.target}`,
+      source: link.source,
+      target: link.target,
+      style: { stroke: "#d8d8d8", strokeDasharray: "4 3" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#d8d8d8", width: 12, height: 12 },
+    });
+  }
+  for (const link of topicConceptLinks) {
+    edges.push({
+      id: `topic-concept-${link.source}-${link.target}`,
+      source: link.source,
+      target: link.target,
+      style: { stroke: "#e5e5e5" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#e5e5e5", width: 10, height: 10 },
+    });
+  }
+  return edges;
+}
+
+// visibleConceptsが属するTopicのうち、実際にグラフへhub nodeとして表示すべきもの
+// （選択中Topicがあればそこから下だけ、無ければ各rootまで遡って含める）。
+function collectRelevantTopicIds(
+  concepts: UnderstandingConcept[],
+  topics: Topic[],
+  selectedTopicId: string | null,
+): Set<string> {
+  const byId = new Map(topics.map((t) => [t._id, t]));
+  const relevant = new Set<string>();
+  for (const concept of concepts) {
+    const primary = concept.topicIds[0];
+    if (!primary) continue;
+    let current = byId.get(primary);
+    const seen = new Set<string>();
+    while (current && !seen.has(current._id)) {
+      relevant.add(current._id);
+      seen.add(current._id);
+      if (selectedTopicId && current._id === selectedTopicId) break;
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+  }
+  return relevant;
 }
 
 function computeMapSummary(
@@ -347,7 +406,7 @@ export default function UnderstandingMapView({
   const [mapState, setMapState] = useState<MapFetchState>({ status: "loading" });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
-  const [hoveredConceptId, setHoveredConceptId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -355,7 +414,7 @@ export default function UnderstandingMapView({
   const [layoutVersion, setLayoutVersion] = useState(0);
   const appliedInitialTopicRef = useRef(false);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | { label: string }>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | TopicNodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
   const nodesRef = useRef<Node[]>([]);
   useEffect(() => {
@@ -415,51 +474,109 @@ export default function UnderstandingMapView({
   );
 
   // ノードの初期配置（force-directed layout）を計算し、React Flowのnodes/edges stateへ反映する。
+  // Topic自体もグラフ上のhub nodeとして扱い、Topic->Topic（親子）・Topic->Concept（所属）の
+  // edgeを張ることで、階層関係を「近くにまとまっている」だけでなく「線と矢印で繋がっている」
+  // ことで見て分かるようにする。
   // resetPositions=falseのときは直前の位置をwarm startとして使い（ドラッグ位置・既存クラスタの
   // 位置を尊重）、resetPositions=true（「整列」ボタン）のときは全ノードをクラスタ中心付近へ
   // 再シードする。この関数は「①データ取得/更新」「②Topicフィルタ変更」「③整列ボタン」の
   // 3か所からしか呼ばれない（hoverや詳細パネルの開閉など他の再レンダーでは呼ばれない）ため、
   // ユーザーがドラッグした位置がそれ以外のタイミングで勝手に戻ることはない。
   function recomputeLayout(resetPositions: boolean) {
-    const clusterKeys = Array.from(new Set(visibleConcepts.map((c) => getClusterKey(c, topics))));
-    const clusterCenters = computeClusterCenters(clusterKeys);
-    const topicNameById = new Map(topics.map((t) => [t._id, t.name]));
+    const relevantTopicIds = collectRelevantTopicIds(visibleConcepts, topics, selectedTopicId);
+    const hasUnclassified = visibleConcepts.some((c) => c.topicIds.length === 0);
+    const topicById = new Map(topics.map((t) => [t._id, t]));
 
-    const forceNodes: ForceNodeInput[] = visibleConcepts.map((c) => {
-      const knowledgeItems = knowledgeByConcept.get(c._id) ?? [];
-      const degree = computeConceptDegree(c._id, knowledgeItems.length, relations);
-      return { id: c._id, clusterKey: getClusterKey(c, topics), radius: computeConceptRadius(degree) };
-    });
-    const forceLinks: ForceLinkInput[] = relations
-      .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
-      .map((r) => ({ source: r.fromConceptId, target: r.toConceptId }));
+    const clusterKeysSet = new Set<string>();
+    for (const topicId of relevantTopicIds) clusterKeysSet.add(findRootTopicId(topics, topicId));
+    if (hasUnclassified) clusterKeysSet.add(UNCLASSIFIED_CLUSTER);
+    const clusterCenters = computeClusterCenters(Array.from(clusterKeysSet));
+
+    const directConceptCountByTopic = new Map<string, number>();
+    for (const concept of visibleConcepts) {
+      const primary = concept.topicIds[0] ?? UNCLASSIFIED_CLUSTER;
+      directConceptCountByTopic.set(primary, (directConceptCountByTopic.get(primary) ?? 0) + 1);
+    }
+
+    const forceNodes: ForceNodeInput[] = [];
+    for (const topicId of relevantTopicIds) {
+      const depth = computeTopicDepth(topics, topicId);
+      const directCount = directConceptCountByTopic.get(topicId) ?? 0;
+      forceNodes.push({
+        id: topicId,
+        kind: "topic",
+        clusterKey: findRootTopicId(topics, topicId),
+        radius: computeTopicRadius(depth, directCount),
+      });
+    }
+    if (hasUnclassified) {
+      forceNodes.push({
+        id: UNCLASSIFIED_CLUSTER,
+        kind: "topic",
+        clusterKey: UNCLASSIFIED_CLUSTER,
+        radius: computeTopicRadius(0, directConceptCountByTopic.get(UNCLASSIFIED_CLUSTER) ?? 0),
+      });
+    }
+    for (const concept of visibleConcepts) {
+      const knowledgeItems = knowledgeByConcept.get(concept._id) ?? [];
+      const degree = computeConceptDegree(concept._id, knowledgeItems.length, relations);
+      forceNodes.push({
+        id: concept._id,
+        kind: "concept",
+        clusterKey: getClusterKey(concept, topics),
+        radius: computeConceptRadius(degree),
+      });
+    }
+
+    const topicParentLinks: { source: string; target: string }[] = [];
+    for (const topicId of relevantTopicIds) {
+      const parentId = topicById.get(topicId)?.parentId;
+      if (parentId && relevantTopicIds.has(parentId)) {
+        topicParentLinks.push({ source: parentId, target: topicId });
+      }
+    }
+    const topicConceptLinks: { source: string; target: string }[] = visibleConcepts.map((c) => ({
+      source: c.topicIds[0] ?? UNCLASSIFIED_CLUSTER,
+      target: c._id,
+    }));
+
+    const forceLinks: ForceLinkInput[] = [
+      ...topicParentLinks.map((l) => ({ ...l, kind: "topicParent" as const })),
+      ...topicConceptLinks.map((l) => ({ ...l, kind: "topicConcept" as const })),
+      ...relations
+        .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
+        .map((r) => ({ source: r.fromConceptId, target: r.toConceptId, kind: "conceptRelation" as const })),
+    ];
 
     const previousPositions = resetPositions
       ? undefined
       : new Map<string, Point>(nodesRef.current.map((n) => [n.id, n.position]));
     const positions = computeForceLayout(forceNodes, forceLinks, clusterCenters, previousPositions);
-    const labelPositions = computeClusterLabelPositions(forceNodes, positions);
 
     const newNodes: Node[] = [];
-    for (const [key, pos] of labelPositions) {
-      newNodes.push({
-        id: `${CLUSTER_LABEL_PREFIX}${key}`,
-        type: "default",
-        data: { label: key === UNCLASSIFIED_CLUSTER ? "未分類" : (topicNameById.get(key) ?? "未分類") },
-        position: pos,
-        draggable: false,
-        selectable: false,
-        connectable: false,
-        style: {
-          border: "none",
-          background: "transparent",
-          color: topicColorMap.get(key) ?? "#888",
-          fontWeight: 700,
-          fontSize: "0.78rem",
-          padding: 0,
-          pointerEvents: "none",
-        },
-      });
+    for (const topicId of relevantTopicIds) {
+      const pos = positions.get(topicId) ?? { x: 0, y: 0 };
+      const depth = computeTopicDepth(topics, topicId);
+      const directCount = directConceptCountByTopic.get(topicId) ?? 0;
+      const data: TopicNodeData = {
+        name: topicById.get(topicId)?.name ?? "",
+        color: topicColorMap.get(findRootTopicId(topics, topicId)) ?? "#888",
+        radius: computeTopicRadius(depth, directCount),
+        dimmed: false,
+        highlighted: false,
+      };
+      newNodes.push({ id: topicId, type: "topic", position: pos, data });
+    }
+    if (hasUnclassified) {
+      const pos = positions.get(UNCLASSIFIED_CLUSTER) ?? { x: 0, y: 0 };
+      const data: TopicNodeData = {
+        name: "未分類",
+        color: "#999999",
+        radius: computeTopicRadius(0, directConceptCountByTopic.get(UNCLASSIFIED_CLUSTER) ?? 0),
+        dimmed: false,
+        highlighted: false,
+      };
+      newNodes.push({ id: UNCLASSIFIED_CLUSTER, type: "topic", position: pos, data });
     }
 
     for (const concept of visibleConcepts) {
@@ -480,7 +597,7 @@ export default function UnderstandingMapView({
     }
 
     setNodes(newNodes);
-    setEdges(buildConceptEdges(relations, visibleIds));
+    setEdges([...buildHierarchyEdges(topicParentLinks, topicConceptLinks), ...buildConceptEdges(relations, visibleIds)]);
     setLayoutVersion((v) => v + 1);
   }
 
@@ -494,37 +611,42 @@ export default function UnderstandingMapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTopicId, mapState]);
 
+  // hoverの隣接判定はConceptRelationだけでなく、Topic階層のedge（親子・所属）も含めた
+  // 「今画面に引かれているすべてのedge」から求める。これにより、Conceptをhoverすると
+  // 所属Topicも、Topic hub nodeをhoverするとその直下のConcept/子Topicも強調される。
   const neighborIds = useMemo(() => {
-    if (!hoveredConceptId) return null;
-    const ids = new Set<string>([hoveredConceptId]);
-    for (const r of relations) {
-      if (r.fromConceptId === hoveredConceptId) ids.add(r.toConceptId);
-      if (r.toConceptId === hoveredConceptId) ids.add(r.fromConceptId);
+    if (!hoveredNodeId) return null;
+    const ids = new Set<string>([hoveredNodeId]);
+    for (const e of edges) {
+      if (e.source === hoveredNodeId) ids.add(e.target);
+      if (e.target === hoveredNodeId) ids.add(e.source);
     }
     return ids;
-  }, [hoveredConceptId, relations]);
+  }, [hoveredNodeId, edges]);
 
   const displayNodes = useMemo(() => {
     if (!neighborIds) return nodes;
     return nodes.map((n) => {
-      if (n.type !== "concept") return n;
       const highlighted = neighborIds.has(n.id);
       return { ...n, data: { ...n.data, highlighted, dimmed: !highlighted } };
     });
   }, [nodes, neighborIds]);
 
   const displayEdges = useMemo(() => {
-    if (!hoveredConceptId) return edges;
+    if (!hoveredNodeId) return edges;
     return edges.map((e) => {
-      const touches = e.source === hoveredConceptId || e.target === hoveredConceptId;
+      const touches = e.source === hoveredNodeId || e.target === hoveredNodeId;
       return {
         ...e,
-        style: { stroke: touches ? "#2b6cb0" : "#eee" },
-        labelStyle: { fontSize: 10, fill: touches ? "#2b6cb0" : "#ddd" },
+        style: { ...e.style, stroke: touches ? "#2b6cb0" : "#eee" },
+        labelStyle: e.label ? { fontSize: 10, fill: touches ? "#2b6cb0" : "#ddd" } : undefined,
+        markerEnd: e.markerEnd
+          ? { type: MarkerType.ArrowClosed, color: touches ? "#2b6cb0" : "#eee" }
+          : undefined,
         zIndex: touches ? 1 : 0,
       };
     });
-  }, [edges, hoveredConceptId]);
+  }, [edges, hoveredNodeId]);
 
   const selectedConcept = useMemo(
     () => activeConcepts.find((c) => c._id === selectedConceptId) ?? null,
@@ -664,12 +786,11 @@ export default function UnderstandingMapView({
             nodeTypes={NODE_TYPES}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onNodeMouseEnter={(_, node) => {
-              if (node.type === "concept") setHoveredConceptId(node.id);
-            }}
-            onNodeMouseLeave={() => setHoveredConceptId(null)}
+            onNodeMouseEnter={(_, node) => setHoveredNodeId(node.id)}
+            onNodeMouseLeave={() => setHoveredNodeId(null)}
             onNodeClick={(_, node) => {
               if (node.type === "concept") handleSelectConcept(node.id);
+              else if (node.type === "topic") handleSelectTopic(node.id === UNCLASSIFIED_CLUSTER ? null : node.id);
             }}
             fitView
             minZoom={0.1}
