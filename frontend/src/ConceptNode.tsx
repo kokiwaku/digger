@@ -43,7 +43,7 @@ export default function ConceptNode({ data }: NodeProps<ConceptNodeData>) {
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       {data.isNew && <span className="concept-node-badge">NEW</span>}
       <span className="concept-node-name">{data.label}</span>
-      {data.knowledgeCount > 0 && <span className="concept-node-count">{data.knowledgeCount} knowledge</span>}
+      {data.knowledgeCount > 1 && <span className="concept-node-count">{data.knowledgeCount}件</span>}
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   );

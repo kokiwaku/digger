@@ -1,35 +1,29 @@
-import { Handle, Position, type NodeProps } from "reactflow";
+import type { NodeProps } from "reactflow";
 
 export type TopicNodeData = {
   name: string;
   color: string;
-  radius: number;
   dimmed: boolean;
   highlighted: boolean;
 };
 
-// Topic hub nodeのCustom Node実装。「Topic自体をノード化しない」旧実装では
-// Topic->Conceptの親子関係がedgeとして見えず分かりにくかったため、Topicも実体として
-// グラフに参加させ、配下のConceptとedgeで直接つながるようにする。
+// TopicはMap上のConcept nodeと同格の丸ノードにはしない。「背景cluster / group label /
+// filter」としてだけ機能する、控えめな浮遊ラベルとして描画する（重いボックスやedgeは持たない。
+// クリックするとそのクラスタでTopicフィルタを適用できる = navigationとしての役割）。
+// 位置はmapLayout.tsのcomputeClusterLabelAnchors()が計算したクラスタ上端中央のアンカーで、
+// CSS側でtranslate(-50%, -100%)して「そのクラスタの真上」に浮くようにする。
 export default function TopicNode({ data }: NodeProps<TopicNodeData>) {
-  const size = data.radius * 2;
+  const classNames = [
+    "topic-cluster-label",
+    data.highlighted && "topic-cluster-label-highlighted",
+    data.dimmed && "topic-cluster-label-dimmed",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div
-      className={`topic-hub-node${data.highlighted ? " topic-hub-node-highlighted" : ""}${data.dimmed ? " topic-hub-node-dimmed" : ""}`}
-      style={{
-        width: size,
-        height: size,
-        borderColor: data.color,
-        background: `${data.color}12`,
-      }}
-      title={data.name}
-    >
-      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
-      <span className="topic-hub-node-name" style={{ color: data.color }}>
-        {data.name}
-      </span>
-      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+    <div className={classNames} style={{ color: data.color, borderColor: `${data.color}55` }} title={data.name}>
+      {data.name}
     </div>
   );
 }

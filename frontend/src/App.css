@@ -798,6 +798,86 @@
   position: relative;
 }
 
+/* Concept検索。「見たいものが既に決まっている」場合の直接アクセスで、Mapを手探りで
+   眺める必要をなくす（検索結果はConcept単位、選択するとそのNodeへカメラが移動する）。 */
+.map-search-bar {
+  margin-bottom: 0.6rem;
+}
+
+.map-search-box {
+  position: relative;
+  max-width: 360px;
+}
+
+.map-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.map-search-input:focus {
+  outline: none;
+  border-color: #2b6cb0;
+}
+
+.map-search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.map-search-result {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 0.45rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: #1a1a1a;
+  cursor: pointer;
+}
+
+.map-search-result:hover {
+  background: #f4f4f4;
+}
+
+.map-search-result-name {
+  font-weight: 600;
+}
+
+.map-search-result-topic {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: #999;
+}
+
+.map-search-empty {
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  color: #999;
+}
+
 /* Topic/階層の深さ/弱いつながり表示を切り替えるフィルタ行。以前は左端に固定幅の
    Topicツリーパネルを常設していたが、Topic数が増えると場所を取り視認性も落ちるため、
    セレクトボックス＋トグルの1行に置き換えた（モバイルでも同じUIでそのまま使える）。 */
@@ -901,10 +981,10 @@
 }
 
 .concept-node-name {
-  font-size: 0.72rem;
+  font-size: 0.62rem;
   font-weight: 600;
   color: #1a1a1a;
-  line-height: 1.2;
+  line-height: 1.15;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -915,8 +995,8 @@
 }
 
 .concept-node-count {
-  margin-top: 0.15rem;
-  font-size: 0.58rem;
+  margin-top: 0.1rem;
+  font-size: 0.5rem;
   color: #999;
 }
 
@@ -951,50 +1031,32 @@
   line-height: 1.4;
 }
 
-/* Topic hub node（React FlowのCustom Node、TopicNode.tsx）。
-   DiggerではConceptが「Map上の具体的なnode」、Topicは「理解領域のまとまり」という
-   役割分担のため、Topicが前景のConceptと同格に見えないよう、薄い塗り・細い破線の
-   境界線で「背景・グルーピング」寄りの控えめな見た目にする（矢印付きedgeによる
-   親子関係の可視化は維持しつつ、視覚的な主張だけを弱める）。 */
-.topic-hub-node {
+/* Topicのクラスタラベル（React FlowのCustom Node、TopicNode.tsx）。
+   DiggerのMapは「気になるConceptから辿る」ことが主役で、Topicは背景のグルーピング・
+   navigation（クリックでそのクラスタに絞り込む）でしかない。そのためConceptと同格の
+   丸nodeにはせず、クラスタの上に浮かぶ小さな文字ラベルだけにする（重いボックス・
+   edgeは持たない）。位置はmapLayout.tsのcomputeClusterLabelAnchors()が計算した
+   クラスタ上端中央で、translate(-50%, -100%)でその真上・中央に浮かせる。 */
+.topic-cluster-label {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  border: 1.5px dashed #2b6cb0;
-  text-align: center;
-  padding: 0.3rem;
+  transform: translate(-50%, -100%);
+  white-space: nowrap;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-bottom: 1.5px dashed;
   cursor: pointer;
-  transition:
-    opacity 0.15s ease,
-    box-shadow 0.15s ease,
-    border-width 0.15s ease;
-}
-
-.topic-hub-node-name {
-  font-size: 0.68rem;
-  font-weight: 600;
-  line-height: 1.2;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  word-break: break-word;
+  pointer-events: auto;
   opacity: 0.85;
+  transition: opacity 0.15s ease;
 }
 
-.topic-hub-node-highlighted {
-  border-style: solid;
-  border-width: 2px;
-  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.25);
-  z-index: 2;
+.topic-cluster-label-highlighted {
+  opacity: 1;
 }
 
-.topic-hub-node-dimmed {
-  opacity: 0.2;
+.topic-cluster-label-dimmed {
+  opacity: 0.25;
 }
 
 .concept-detail-panel-wrapper {
@@ -1095,6 +1157,10 @@
 @media (max-width: 900px) {
   .understanding-map-layout {
     flex-direction: column;
+  }
+
+  .map-search-box {
+    max-width: none;
   }
 
   .map-filter-bar {

@@ -1,14 +1,11 @@
 // Understanding Mapのノード配置ロジック（Reactに依存しない純粋なモジュール）。
-// 「トピックごとに二重円を機械的に並べる」だけの配置ではなく、d3-forceの
-// force-directed layoutで「関連するConceptは近く、同じTopicのConceptは自然に集まる」
-// 有機的な配置を一度だけ計算する。continuous animationはしない（計算後にsimulationを止める）。
 //
-// Topic->Conceptの親子関係を「見て分かる」ようにするため、Topic自体もグラフ上の実体
-// （hub node）として扱い、Topic->Topic（親子）・Topic->Concept（所属）のedgeを
-// ConceptRelationのedgeとは別に持つ。これにより、単なる「近くにまとまっている」ではなく
-// 「線で繋がっている」ことで階層が視覚的に分かる（矢印の向き含む）。
+// Mapの役割は「すべてを一覧させること」ではなく「気になるConceptから、理解のつながりを
+// 辿ること」に絞っている。そのためTopicはグラフ上のnode（hub node）としては扱わず、
+// 同じクラスタのConcept群をまとめる背景ラベル（表示専用・非physicsな存在）としてのみ扱う。
+// force simulationの対象はConcept nodeだけで、Topic階層のedge（親子・所属）も張らない
+// （「近い」ことは色分け＋弱いクラスタリング力だけで表現し、線を増やしすぎない）。
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
-import type { ConceptRelation } from "./types";
 
 export interface TopicLike {
   _id: string;
@@ -31,36 +28,15 @@ export function findRootTopicId(topics: TopicLike[], topicId: string): string {
   return current?._id ?? topicId;
 }
 
-// topicIdの深さ（root=0）。Topic hub nodeのサイズ（rootほど大きく）に使う。
-export function computeTopicDepth(topics: TopicLike[], topicId: string): number {
-  const byId = new Map(topics.map((t) => [t._id, t]));
-  let depth = 0;
-  let current = byId.get(topicId);
-  const seen = new Set<string>();
-  while (current?.parentId && !seen.has(current._id)) {
-    seen.add(current._id);
-    const parent = byId.get(current.parentId);
-    if (!parent) break;
-    depth++;
-    current = parent;
-  }
-  return depth;
-}
-
 export interface ConceptLike {
   _id: string;
   topicIds: string[];
 }
 
-// Conceptが直接属するTopic（=topicIds[0]）のid。未分類は専用キーを返す。
-// Topic hub nodeへのedgeを張る対象そのもの（クラスタ分けの基準ではなく、直接の親）。
-export function getPrimaryTopicId(concept: ConceptLike): string {
-  return concept.topicIds[0] ?? UNCLASSIFIED_CLUSTER;
-}
-
 // クラスタ分け（画面上でどのTopicファミリーに属するか）の基準は、Conceptの最初の
 // topicIdが属するルートTopic。topicIdsが空（未分類）のConceptは専用の「未分類」
-// クラスタに入れる。
+// クラスタに入れる。Topicの階層（親子）はクラスタ分けにしか使わず、Map上に
+// 個別の階層構造としては描画しない（ルートTopicひとつにつき、ラベルはひとつだけ）。
 export function getClusterKey(concept: ConceptLike, topics: TopicLike[]): string {
   const primaryTopicId = concept.topicIds[0];
   if (!primaryTopicId) return UNCLASSIFIED_CLUSTER;
@@ -74,9 +50,8 @@ export type Point = { x: number; y: number };
 export function computeClusterCenters(clusterKeys: string[]): Map<string, Point> {
   const clusterCount = Math.max(clusterKeys.length, 1);
   // クラスタ間の距離を広げすぎると「1つの理解マップ」ではなく孤立した島の集まりに
-  // 見えてしまう（ユーザー指摘）。node同士の重なりはforceCollideが防ぐため、
-  // ここでの半径は控えめにとどめる。
-  const radius = Math.max(140, clusterCount * 65);
+  // 見えてしまう。node同士の重なりはforceCollideが防ぐため、ここでの半径は控えめにとどめる。
+  const radius = Math.max(120, clusterCount * 55);
   const angleStep = (2 * Math.PI) / clusterCount;
 
   const centers = new Map<string, Point>();
@@ -90,28 +65,17 @@ export function computeClusterCenters(clusterKeys: string[]): Map<string, Point>
   return centers;
 }
 
-// Concept重要度（紐づくKnowledge数＋関係数）から、視覚サイズと衝突判定の両方に使う半径を求める。
-// 差が極端にならないよう上限8でクランプする。
-export function computeConceptRadius(degree: number): number {
-  const sizeBoost = Math.min(degree, 8);
-  return 30 + sizeBoost * 2.4;
+// Node sizeは「なぜこのNodeが大きいのか」が直感的に分かるよう、Conceptに紐づく
+// Knowledge数だけで決める（relation数は使わない。relationが多い＝理解が深いとは限らないため）。
+// サイズ差も極端にならないよう3段階・6px刻みに抑える。
+export function computeConceptRadius(knowledgeCount: number): number {
+  if (knowledgeCount <= 1) return 18; // 36px
+  if (knowledgeCount <= 3) return 21; // 42px
+  return 24; // 48px
 }
-
-// Topic hub nodeの半径。root Topicほど大きく、深い階層ほど小さくする
-// （「Topic=大きな理解領域、Concept=具体的な対象」という主従関係を大きさでも表現する）。
-// ただしConceptと同格の「もう1種類のConcept」に見えないよう、Concept nodeの平均的な
-// サイズ（30〜48程度）から大きく飛び抜けすぎない範囲に抑える。
-export function computeTopicRadius(depth: number, directConceptCount: number): number {
-  const base = depth === 0 ? 40 : depth === 1 ? 34 : 28;
-  return base + Math.min(directConceptCount, 6) * 1.2;
-}
-
-export type ForceNodeKind = "topic" | "concept";
-export type ForceLinkKind = "topicParent" | "topicConcept" | "conceptRelation";
 
 export interface ForceNodeInput {
   id: string;
-  kind: ForceNodeKind;
   clusterKey: string;
   radius: number;
 }
@@ -119,7 +83,6 @@ export interface ForceNodeInput {
 export interface ForceLinkInput {
   source: string;
   target: string;
-  kind: ForceLinkKind;
 }
 
 interface SimNode extends ForceNodeInput {
@@ -131,30 +94,10 @@ interface SimNode extends ForceNodeInput {
 
 const SIMULATION_TICKS = 300;
 
-// linkのkindごとに距離・強さを変える。topicParent/topicConceptは階層構造をはっきり
-// 見せるためやや短く強め、conceptRelationは「近すぎてどれが繋がっているか分からない」
-// ことを避けるためlinkの距離を長めに取る。
-function linkDistance(kind: ForceLinkKind): number {
-  switch (kind) {
-    case "topicParent":
-      return 65;
-    case "topicConcept":
-      return 85;
-    case "conceptRelation":
-      return 130;
-  }
-}
-
-function linkStrength(kind: ForceLinkKind): number {
-  switch (kind) {
-    case "topicParent":
-      return 0.65;
-    case "topicConcept":
-      return 0.5;
-    case "conceptRelation":
-      return 0.22;
-  }
-}
+// ConceptRelationのedge（force layout上ではこれだけがlink force）。「近すぎてどれが
+// 繋がっているか分からない」ことを避けつつ、関連するConcept同士が自然に近づく程度の距離・強さ。
+const RELATION_LINK_DISTANCE = 120;
+const RELATION_LINK_STRENGTH = 0.32;
 
 // previousPositions（フィルタ変更前・ドラッグ後の位置）が渡された場合はwarm startとして使う。
 // 新規ノードはクラスタ中心付近にランダムな初期位置を与える。
@@ -195,28 +138,27 @@ export function computeForceLayout(
       "link",
       forceLink<SimNode, ForceLinkInput>(validLinks)
         .id((d) => d.id)
-        .distance((d) => linkDistance((d as unknown as ForceLinkInput).kind))
-        .strength((d) => linkStrength((d as unknown as ForceLinkInput).kind)),
+        .distance(RELATION_LINK_DISTANCE)
+        .strength(RELATION_LINK_STRENGTH),
     )
     // 反発はnode同士の重なり防止に必要な最小限にとどめる（強すぎるとクラスタが
-    // 孤立した島のように離れてしまう、というユーザー指摘への対応）。重なり防止自体は
-    // forceCollideが担う。
-    .force("charge", forceManyBody().strength(-170))
+    // 孤立した島のように離れてしまう）。重なり防止自体はforceCollideが担う。
+    .force("charge", forceManyBody().strength(-150))
     .force(
       "collide",
       forceCollide<SimNode>().radius((d) => d.radius + 10),
     )
     .force(
       "clusterX",
-      forceX<SimNode>((d) => clusterCenters.get(d.clusterKey)?.x ?? 0).strength(0.07),
+      forceX<SimNode>((d) => clusterCenters.get(d.clusterKey)?.x ?? 0).strength(0.08),
     )
     .force(
       "clusterY",
-      forceY<SimNode>((d) => clusterCenters.get(d.clusterKey)?.y ?? 0).strength(0.07),
+      forceY<SimNode>((d) => clusterCenters.get(d.clusterKey)?.y ?? 0).strength(0.08),
     )
     // 全体を中心へ寄せる力を強めにし、クラスタ同士が完全に分断されず
-    // 「1つのマップ」として見えるようにする。
-    .force("center", forceCenter(0, 0).strength(0.05))
+    // 「1つのマップ」として見え、かつ全体がコンパクトにまとまるようにする。
+    .force("center", forceCenter(0, 0).strength(0.06))
     .stop();
 
   for (let i = 0; i < SIMULATION_TICKS; i++) {
@@ -224,6 +166,36 @@ export function computeForceLayout(
   }
 
   return new Map(simNodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+}
+
+export interface ClusterMember {
+  id: string;
+  clusterKey: string;
+  radius: number;
+}
+
+// Topicは「重いボックス」ではなく、クラスタの上に浮かべる控えめなラベルとして表現する。
+// 実際のConcept配置（force layout後の座標）からクラスタの外接矩形を求め、その上端中央を
+// ラベルのアンカー座標にする（ラベル自体はCSS側でtranslate(-50%, -100%)し、アンカーの
+// 真上・中央に浮くように描画する）。
+export function computeClusterLabelAnchors(members: ClusterMember[], positions: Map<string, Point>): Map<string, Point> {
+  const bounds = new Map<string, { minX: number; maxX: number; minY: number }>();
+  for (const member of members) {
+    const pos = positions.get(member.id);
+    if (!pos) continue;
+    const current = bounds.get(member.clusterKey) ?? { minX: Infinity, maxX: -Infinity, minY: Infinity };
+    current.minX = Math.min(current.minX, pos.x - member.radius);
+    current.maxX = Math.max(current.maxX, pos.x + member.radius);
+    current.minY = Math.min(current.minY, pos.y - member.radius);
+    bounds.set(member.clusterKey, current);
+  }
+
+  const LABEL_GAP = 20;
+  const anchors = new Map<string, Point>();
+  for (const [key, b] of bounds) {
+    anchors.set(key, { x: (b.minX + b.maxX) / 2, y: b.minY - LABEL_GAP });
+  }
+  return anchors;
 }
 
 const TOPIC_COLOR_PALETTE = ["#2b6cb0", "#c0392b", "#2f855a", "#b7791f", "#6b46c1", "#00838f", "#ad1457", "#4e5d94"];
@@ -242,10 +214,4 @@ export function buildTopicColorMap(clusterKeys: string[]): Map<string, string> {
     paletteIndex++;
   }
   return map;
-}
-
-// Conceptの重要度（node sizeの根拠）＝紐づくKnowledge数＋関係数。
-export function computeConceptDegree(conceptId: string, knowledgeCount: number, relations: ConceptRelation[]): number {
-  const relationCount = relations.filter((r) => r.fromConceptId === conceptId || r.toConceptId === conceptId).length;
-  return knowledgeCount + relationCount;
 }
