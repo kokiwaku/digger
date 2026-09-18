@@ -45,24 +45,27 @@ export function getClusterKey(concept: ConceptLike, topics: TopicLike[]): string
 export type Point = { x: number; y: number };
 
 // Node sizeは「理解構造上の階層」を第一基準にする（relation数・Knowledge数を主基準にしない）。
-// 階層が一目で分かるよう、Root Topic > Subtopic > Concept > Knowledgeの差を明確に付ける。
-export const ROOT_TOPIC_BASE_SIZE = 60;
-export const SUBTOPIC_BASE_SIZE = 48;
-export const CONCEPT_BASE_SIZE = 38;
-export const KNOWLEDGE_NODE_WIDTH = 132;
-export const KNOWLEDGE_NODE_HEIGHT = 30;
+// 階層が一目で分かるよう、Root Topic > Subtopic > Concept > Knowledgeの差を強めに付ける
+// （以前のサイズ差は小さすぎたため拡大した）。KnowledgeはleafなのでConceptよりはっきり
+// 小さいdot＋短いcaptionにし、Map上ではもう内容を読ませない（詳細はDetail Panel）。
+export const ROOT_TOPIC_BASE_SIZE = 64;
+export const SUBTOPIC_BASE_SIZE = 50;
+export const CONCEPT_BASE_SIZE = 40;
+export const KNOWLEDGE_DOT_SIZE = 22;
+export const KNOWLEDGE_NODE_WIDTH = 76;
+export const KNOWLEDGE_NODE_HEIGHT = 40;
 
 // 同階層内の補助差（あくまで基本サイズへの小さな上乗せにとどめる。主基準は階層そのもの）。
 export function computeRootTopicSize(childCount: number): number {
-  return ROOT_TOPIC_BASE_SIZE + Math.min(8, childCount * 1.2);
+  return ROOT_TOPIC_BASE_SIZE + Math.min(6, childCount * 1);
 }
 
 export function computeSubtopicSize(childCount: number): number {
-  return SUBTOPIC_BASE_SIZE + Math.min(6, childCount * 1);
+  return SUBTOPIC_BASE_SIZE + Math.min(5, childCount * 0.8);
 }
 
 export function computeConceptSize(knowledgeCount: number): number {
-  return CONCEPT_BASE_SIZE + Math.min(6, knowledgeCount * 1.5);
+  return CONCEPT_BASE_SIZE + Math.min(4, knowledgeCount * 1);
 }
 
 export type MapNodeKind = "rootTopic" | "subtopic" | "concept" | "knowledge";
@@ -97,11 +100,12 @@ export function computeHierarchyLayout(
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
     rankdir: direction,
-    // ranksep: 階層間（Root Topic→Subtopic→Concept→Knowledge）の間隔。
-    // nodesep: 同じ階層内でのnode間の間隔。木同士が混ざらない程度の余白は欲しいが、
-    // 離れすぎて「複数の島」に見えないよう、控えめな値にとどめる。
-    ranksep: 70,
-    nodesep: 20,
+    // ranksep: 階層間（Root Topic→Subtopic→Concept→Knowledge）の間隔。Knowledgeが
+    // 小さなdotになりMap全体の情報量が減ったため、以前より少し詰めて全体をコンパクトにする。
+    // nodesep: 同じ階層内でのnode間の間隔。詰まって見えないよう以前より広げつつ、
+    // 離れすぎて「複数の島」に見えないよう、branchが重ならない程度にとどめる。
+    ranksep: 60,
+    nodesep: 28,
     marginx: 20,
     marginy: 20,
   });
