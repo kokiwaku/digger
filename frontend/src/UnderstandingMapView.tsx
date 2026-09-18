@@ -149,7 +149,8 @@ function isRecent(dateStr: string): boolean {
 // Mapは俯瞰用のUIなので、node内のlabelは原則1〜2行に収まる文字数に短縮する。
 // フルテキストはtitle属性（hover tooltip）と詳細パネルで確認できる。
 const LABEL_MAX_CHARS = 12;
-const KNOWLEDGE_LABEL_MAX_CHARS = 16;
+// Knowledgeはdot＋短いcaptionのleafなので、Conceptよりさらに短く切る（1行に収める）。
+const KNOWLEDGE_LABEL_MAX_CHARS = 14;
 
 function truncateLabel(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -182,13 +183,17 @@ function buildCrossRelationEdges(relations: ConceptRelation[], visibleConceptIds
     }));
 }
 
+// 階層edge（parent-child）はMapの主構造なので、branchが追いやすいよう elbow風の
+// smoothstepにする（ConceptRelationのbezier曲線とは見た目を変え、主従がはっきり分かる
+// ようにする）。細すぎず、しかし主張しすぎない太さ・色にとどめる。
 function buildParentChildEdges(edges: HierarchyEdgeInput[]): Edge[] {
   return edges.map((e) => ({
     id: e.id,
     source: e.source,
     target: e.target,
-    style: { stroke: "#bbb", strokeWidth: 1.5 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: "#bbb", width: 12, height: 12 },
+    type: "smoothstep",
+    style: { stroke: "#b0b0b0", strokeWidth: 1.75 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: "#b0b0b0", width: 12, height: 12 },
     zIndex: 1,
   }));
 }
@@ -718,6 +723,7 @@ export default function UnderstandingMapView({
         size,
         dimmed: false,
         highlighted: false,
+        selected: false,
       };
       newNodes.push({ id: t._id, type: "topic", position: pos, data, style: { width: size, height: size }, zIndex: 2 });
     }
@@ -732,6 +738,7 @@ export default function UnderstandingMapView({
         size,
         dimmed: false,
         highlighted: false,
+        selected: false,
       };
       newNodes.push({
         id: UNCLASSIFIED_CLUSTER,
@@ -770,6 +777,7 @@ export default function UnderstandingMapView({
           color: topicColorMap.get(clusterKey) ?? "#2b6cb0",
           dimmed: false,
           highlighted: false,
+          selected: false,
         };
         newNodes.push({
           id: item._id,
@@ -825,12 +833,16 @@ export default function UnderstandingMapView({
   const displayNodes = useMemo(() => {
     return nodes.map((n) => {
       const highlighted = activeNeighborIds ? activeNeighborIds.has(n.id) : false;
+      // 選択・hoverが無関係の場所全体を消えたように見せると、Map全体の位置関係が
+      // 分からなくなってしまう（「選択Conceptが分かることは重要だが、他が見えなくなる
+      // ほど薄くしない」という方針）。dimmedは各Node componentのCSS側でopacity 0.6程度に
+      // とどめている（0.25のような強い減衰はしない）。
       const dimmed = activeNeighborIds ? !highlighted : false;
-      if (n.type === "concept") {
-        const selected = selectedNode?.kind === "concept" && selectedNode.id === n.id;
-        return { ...n, data: { ...n.data, highlighted, dimmed, selected } };
-      }
-      return { ...n, data: { ...n.data, highlighted, dimmed } };
+      // selectedはhoverの有無に関わらず「今クリックして選んでいるNode」を常に示す
+      // 独立した状態（outline+halo+わずかな拡大）で、Topic/Concept/Knowledgeいずれの
+      // 種別でも同じ扱いにする。
+      const selected = selectedNode?.id === n.id;
+      return { ...n, data: { ...n.data, highlighted, dimmed, selected } };
     });
   }, [nodes, activeNeighborIds, selectedNode]);
 

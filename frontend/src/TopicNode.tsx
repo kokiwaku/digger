@@ -9,6 +9,7 @@ export type TopicNodeData = {
   size: number;
   dimmed: boolean;
   highlighted: boolean;
+  selected: boolean;
 };
 
 // Root TopicとSubtopicは役割は違うが見た目の作りは共通（円形・塗りつぶし）なので
@@ -22,6 +23,7 @@ export default function TopicNode({ data }: NodeProps<TopicNodeData>) {
     isRoot ? "topic-hierarchy-node-root" : "topic-hierarchy-node-sub",
     data.highlighted && "topic-hierarchy-node-highlighted",
     data.dimmed && "topic-hierarchy-node-dimmed",
+    data.selected && "topic-hierarchy-node-selected",
   ]
     .filter(Boolean)
     .join(" ");

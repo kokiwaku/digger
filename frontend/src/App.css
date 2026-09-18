@@ -970,7 +970,7 @@
 }
 
 .concept-node-name {
-  font-size: 0.62rem;
+  font-size: 0.64rem;
   font-weight: 600;
   color: #1a1a1a;
   line-height: 1.15;
@@ -989,22 +989,25 @@
   color: #999;
 }
 
-/* hover中のnode、およびhover対象と直接つながるnodeを強調する。 */
+/* hover中のnode、およびhover対象と直接つながるnodeを軽く強調する（あくまで控えめに。
+   派手な強調はselected/hoverしているnode自身のリング表現に譲る）。 */
 .concept-node-highlighted {
-  border-width: 3px;
-  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.35);
+  border-width: 2.5px;
   z-index: 2;
 }
 
-/* hover中は、関係の無いnodeを控えめに薄くして関係を追いやすくする。 */
+/* 選択・hover中に無関係なnodeを薄くするが、Map全体の位置関係が分からなくなるほどは
+   消さない（0.6程度。以前の0.25は薄すぎるという指摘への対応）。 */
 .concept-node-dimmed {
-  opacity: 0.25;
+  opacity: 0.6;
 }
 
-/* クリックして詳細パネルを開いたConceptを、hoverのhighlightedとは別に
-   控えめなアウトリングで示す（派手にしすぎない）。 */
+/* クリックして詳細パネルを開いたNodeを、outline（リング）＋わずかな拡大で示す
+   （hoverの軽い強調とは別の、常に見える独立した状態）。Topic/Concept/Knowledge共通。 */
 .concept-node-selected {
-  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.25);
+  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.3);
+  transform: scale(1.08);
+  z-index: 3;
 }
 
 /* Root Topic / Subtopic（React FlowのCustom Node、TopicNode.tsx）。
@@ -1024,7 +1027,8 @@
   transition:
     opacity 0.15s ease,
     box-shadow 0.15s ease,
-    border-width 0.15s ease;
+    border-width 0.15s ease,
+    transform 0.15s ease;
 }
 
 .topic-hierarchy-node-root {
@@ -1038,7 +1042,7 @@
 }
 
 .topic-hierarchy-node-name {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   color: #1a1a1a;
   line-height: 1.15;
   max-width: 100%;
@@ -1051,64 +1055,88 @@
 }
 
 .topic-hierarchy-node-highlighted {
-  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.3);
+  border-width: 3.5px;
   z-index: 2;
 }
 
 .topic-hierarchy-node-dimmed {
-  opacity: 0.25;
+  opacity: 0.6;
+}
+
+.topic-hierarchy-node-selected {
+  box-shadow: 0 0 0 4px rgba(43, 108, 176, 0.3);
+  transform: scale(1.06);
+  z-index: 3;
 }
 
 /* Knowledgeのleaf node（React FlowのCustom Node、KnowledgeNode.tsx）。
-   Root Topic/Subtopic/Conceptの「丸＝階層nodeの実体」という見た目とはっきり区別するため、
-   丸nodeにはせず小さな角丸pillにする。Knowledge本文全文は表示せず、短縮タイトルのみ。 */
+   「Mapは内容を読む場所ではなく理解構造を見る場所」という方針のため、Knowledgeは
+   Root Topic/Subtopic/Conceptの「丸＝階層nodeの実体」より明確に小さい、dot＋短い
+   captionのleaf表現にする（角丸pill/横長カードにはしない）。Knowledge本文全文は
+   Map上に一切出さず、クリック後の右Detail Panelでのみ確認できる。 */
 .knowledge-leaf-node {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   width: 100%;
   height: 100%;
-  border-radius: 999px;
-  border: 1.5px solid;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-  padding: 0.2rem 0.6rem;
+  gap: 0.15rem;
   cursor: pointer;
   transition:
     opacity 0.15s ease,
-    box-shadow 0.15s ease;
+    transform 0.15s ease;
 }
 
-.knowledge-leaf-node-label {
-  font-size: 0.62rem;
-  color: #333;
+.knowledge-leaf-dot {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+/* NEWは直近7日以内のKnowledgeだけに付ける、小さな印にとどめる（テキストの
+   「NEW」バッジではなく、dotの縁を彩る程度の控えめな表現にしてMapの主役にしない）。 */
+.knowledge-leaf-dot-new {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid #2b6cb0;
+}
+
+.knowledge-leaf-caption {
+  font-size: 0.56rem;
+  color: #555;
   line-height: 1.1;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.knowledge-leaf-node-badge {
-  position: absolute;
-  top: -8px;
-  left: -4px;
-  padding: 0 0.25rem;
-  border-radius: 4px;
-  background: #2b6cb0;
-  color: #fff;
-  font-size: 0.5rem;
-  font-weight: 700;
-  line-height: 1.3;
+.knowledge-leaf-node-highlighted .knowledge-leaf-dot {
+  box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.35);
 }
 
 .knowledge-leaf-node-highlighted {
-  box-shadow: 0 2px 8px rgba(43, 108, 176, 0.3);
   z-index: 2;
 }
 
 .knowledge-leaf-node-dimmed {
-  opacity: 0.25;
+  opacity: 0.6;
+}
+
+.knowledge-leaf-node-selected {
+  transform: scale(1.15);
+  z-index: 3;
+}
+
+.knowledge-leaf-node-selected .knowledge-leaf-dot {
+  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.35);
 }
 
 .concept-detail-panel-wrapper {
