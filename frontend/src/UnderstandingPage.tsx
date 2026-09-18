@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import type { KnowledgeStatus, SavedKnowledge } from "./types";
 import UnderstandingMapView from "./UnderstandingMapView";
 
@@ -8,8 +9,6 @@ type FetchState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "success"; items: SavedKnowledge[] };
-
-type UnderstandingTab = "recent" | "topic" | "map";
 
 async function fetchSavedKnowledge(): Promise<SavedKnowledge[]> {
   const res = await fetch(`${API_BASE_URL}/api/knowledge`);
@@ -205,7 +204,8 @@ function KnowledgeDetailModal({
   );
 }
 
-function EmptyState({ onGoDig }: { onGoDig: () => void }) {
+function EmptyState() {
+  const navigate = useNavigate();
   return (
     <div className="understanding-empty">
       <img className="understanding-empty-image" src="/assets/frames/mole-icon.png" alt="" aria-hidden="true" />
@@ -214,7 +214,7 @@ function EmptyState({ onGoDig }: { onGoDig: () => void }) {
         <br />
         気になる記事を掘ると、ここにあなたの理解が少しずつ育っていきます。
       </p>
-      <button type="button" className="dig-button" onClick={onGoDig}>
+      <button type="button" className="dig-button" onClick={() => navigate("/dig")}>
         記事を掘る
       </button>
     </div>
@@ -237,20 +237,87 @@ function KnowledgeRow({ item, onSelect }: { item: SavedKnowledge; onSelect: (ite
   );
 }
 
-export default function UnderstandingPage({ onGoDig }: { onGoDig: () => void }) {
+function RecentView({
+  items,
+  onSelect,
+}: {
+  items: SavedKnowledge[];
+  onSelect: (item: SavedKnowledge) => void;
+}) {
+  return (
+    <div className="understanding-view">
+      {groupByDate(items).map((group) => (
+        <div key={group.label} className="understanding-date-group">
+          <h3 className="understanding-date-label">{group.label}</h3>
+          <ul className="understanding-item-list">
+            {group.items.map((item) => (
+              <KnowledgeRow key={item._id} item={item} onSelect={onSelect} />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TopicView({
+  items,
+  onSelect,
+  onViewInMap,
+}: {
+  items: SavedKnowledge[];
+  onSelect: (item: SavedKnowledge) => void;
+  onViewInMap: (topic: string) => void;
+}) {
+  const { tree, unclassified } = buildTopicTree(items);
+  return (
+    <div className="understanding-view">
+      <TopicTree nodes={tree} onSelect={onSelect} onViewInMap={onViewInMap} />
+      {unclassified.length > 0 && (
+        <div className="topic-node">
+          <p className="topic-node-name">
+            未分類
+            <button
+              type="button"
+              className="topic-node-map-link"
+              onClick={() => onViewInMap(UNCLASSIFIED_TOPIC_LABEL)}
+            >
+              この分野をマップで見る →
+            </button>
+          </p>
+          <ul className="topic-node-items">
+            {unclassified.map((item) => (
+              <li key={item._id}>
+                <button
+                  type="button"
+                  className={`topic-item-button ${statusClassName(item)}`}
+                  onClick={() => onSelect(item)}
+                >
+                  {item.concept}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function UnderstandingPage() {
   const [state, setState] = useState<FetchState>({ status: "loading" });
-  const [tab, setTab] = useState<UnderstandingTab>("recent");
   const [selected, setSelected] = useState<SavedKnowledge | null>(null);
   const [mapTopicFilter, setMapTopicFilter] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   // トピックビューから「この分野をマップで見る」を押したときに、マップ側の絞り込みを
-  // セットしつつタブを切り替える。トピックビュー（旧Knowledge.topicPathモデル）とマップ
-  // （新しいTopic/Conceptモデル）は別の分類結果を持つため、同名のTopicがマップ側にも
+  // セットしつつマップのrouteへ移動する。トピックビュー（旧Knowledge.topicPathモデル）と
+  // マップ（新しいTopic/Conceptモデル）は別の分類結果を持つため、同名のTopicがマップ側にも
   // あれば絞り込む「ベストエフォート」の連携とする（一致しなければ「すべて」表示になる。
   // 詳細はUnderstandingMapView.tsxのinitialTopicName処理を参照）。
   function goToMapFilteredByTopic(topic: string) {
     setMapTopicFilter(topic);
-    setTab("map");
+    navigate("/understanding/map");
   }
 
   useEffect(() => {
@@ -277,100 +344,47 @@ export default function UnderstandingPage({ onGoDig }: { onGoDig: () => void }) 
       {state.status === "loading" && <p className="section-body">読み込み中…</p>}
       {state.status === "error" && <p className="error-message">エラー: {state.message}</p>}
 
-      {state.status === "success" && state.items.length === 0 && <EmptyState onGoDig={onGoDig} />}
+      {state.status === "success" && state.items.length === 0 && <EmptyState />}
 
       {state.status === "success" && state.items.length > 0 && (
         <>
           <div className="understanding-tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "recent"}
-              className={tab === "recent" ? "understanding-tab active" : "understanding-tab"}
-              onClick={() => setTab("recent")}
+            <NavLink
+              to="/understanding/recent"
+              className={({ isActive }) => (isActive ? "understanding-tab active" : "understanding-tab")}
             >
               最近
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "topic"}
-              className={tab === "topic" ? "understanding-tab active" : "understanding-tab"}
-              onClick={() => setTab("topic")}
+            </NavLink>
+            <NavLink
+              to="/understanding/topic"
+              className={({ isActive }) => (isActive ? "understanding-tab active" : "understanding-tab")}
             >
               トピック
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "map"}
-              className={tab === "map" ? "understanding-tab active" : "understanding-tab"}
-              onClick={() => setTab("map")}
+            </NavLink>
+            <NavLink
+              to="/understanding/map"
+              className={({ isActive }) => (isActive ? "understanding-tab active" : "understanding-tab")}
             >
               マップ
-            </button>
+            </NavLink>
           </div>
 
-          {tab === "recent" && (
-            <div className="understanding-view">
-              {groupByDate(state.items).map((group) => (
-                <div key={group.label} className="understanding-date-group">
-                  <h3 className="understanding-date-label">{group.label}</h3>
-                  <ul className="understanding-item-list">
-                    {group.items.map((item) => (
-                      <KnowledgeRow key={item._id} item={item} onSelect={setSelected} />
-                    ))}
-                  </ul>
+          <Routes>
+            <Route index element={<Navigate to="recent" replace />} />
+            <Route path="recent" element={<RecentView items={state.items} onSelect={setSelected} />} />
+            <Route
+              path="topic"
+              element={<TopicView items={state.items} onSelect={setSelected} onViewInMap={goToMapFilteredByTopic} />}
+            />
+            <Route
+              path="map"
+              element={
+                <div className="understanding-view understanding-view-map">
+                  <UnderstandingMapView knowledge={state.items} initialTopicName={mapTopicFilter} />
                 </div>
-              ))}
-            </div>
-          )}
-
-          {tab === "topic" && (
-            <div className="understanding-view">
-              {(() => {
-                const { tree, unclassified } = buildTopicTree(state.items);
-                return (
-                  <>
-                    <TopicTree nodes={tree} onSelect={setSelected} onViewInMap={goToMapFilteredByTopic} />
-                    {unclassified.length > 0 && (
-                      <div className="topic-node">
-                        <p className="topic-node-name">
-                          未分類
-                          <button
-                            type="button"
-                            className="topic-node-map-link"
-                            onClick={() => goToMapFilteredByTopic(UNCLASSIFIED_TOPIC_LABEL)}
-                          >
-                            この分野をマップで見る →
-                          </button>
-                        </p>
-                        <ul className="topic-node-items">
-                          {unclassified.map((item) => (
-                            <li key={item._id}>
-                              <button
-                                type="button"
-                                className={`topic-item-button ${statusClassName(item)}`}
-                                onClick={() => setSelected(item)}
-                              >
-                                {item.concept}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-          )}
-
-          {tab === "map" && (
-            <div className="understanding-view understanding-view-map">
-              <UnderstandingMapView knowledge={state.items} onGoDig={onGoDig} initialTopicName={mapTopicFilter} />
-            </div>
-          )}
+              }
+            />
+          </Routes>
         </>
       )}
 

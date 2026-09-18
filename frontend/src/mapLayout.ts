@@ -1,14 +1,12 @@
 // Understanding Mapのノード配置ロジック（Reactに依存しない純粋なモジュール）。
-// 「トピックごとに二重円を機械的に並べる」だけの配置ではなく、d3-forceの
-// force-directed layoutで「関連するConceptは近く、同じTopicのConceptは自然に集まる」
-// 有機的な配置を一度だけ計算する。continuous animationはしない（計算後にsimulationを止める）。
 //
-// Topic->Conceptの親子関係を「見て分かる」ようにするため、Topic自体もグラフ上の実体
-// （hub node）として扱い、Topic->Topic（親子）・Topic->Concept（所属）のedgeを
-// ConceptRelationのedgeとは別に持つ。これにより、単なる「近くにまとまっている」ではなく
-// 「線で繋がっている」ことで階層が視覚的に分かる（矢印の向き含む）。
-import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
-import type { ConceptRelation } from "./types";
+// Mapは「Conceptをランダムに散らしてつなぐもの」ではなく「ユーザーの現在の理解構造
+// （Topic hierarchy）を視覚化したもの」として設計する。そのためforce-directed layout
+// （d3-force）はやめ、Root Topic → Subtopic → Concept → Knowledgeという階層を
+// そのまま木構造レイアウト（dagre）で描画する。ConceptRelationは階層を補足する
+// 横断的なつながりとして別途重ねるだけで、レイアウト自体はTopic hierarchyだけで
+// 常に成立する（relationが0件でも意味のあるMapになる）。
+import dagre from "dagre";
 
 export interface TopicLike {
   _id: string;
@@ -17,7 +15,7 @@ export interface TopicLike {
 
 export const UNCLASSIFIED_CLUSTER = "__unclassified__";
 
-// topicIdの親を辿ってルートTopicのidを返す（マップのクラスタ分けに使う）。
+// topicIdの親を辿ってルートTopicのidを返す（色分け・「すべて」表示時のtree単位に使う）。
 export function findRootTopicId(topics: TopicLike[], topicId: string): string {
   const byId = new Map(topics.map((t) => [t._id, t]));
   let current = byId.get(topicId);
@@ -31,36 +29,13 @@ export function findRootTopicId(topics: TopicLike[], topicId: string): string {
   return current?._id ?? topicId;
 }
 
-// topicIdの深さ（root=0）。Topic hub nodeのサイズ（rootほど大きく）に使う。
-export function computeTopicDepth(topics: TopicLike[], topicId: string): number {
-  const byId = new Map(topics.map((t) => [t._id, t]));
-  let depth = 0;
-  let current = byId.get(topicId);
-  const seen = new Set<string>();
-  while (current?.parentId && !seen.has(current._id)) {
-    seen.add(current._id);
-    const parent = byId.get(current.parentId);
-    if (!parent) break;
-    depth++;
-    current = parent;
-  }
-  return depth;
-}
-
 export interface ConceptLike {
   _id: string;
   topicIds: string[];
 }
 
-// Conceptが直接属するTopic（=topicIds[0]）のid。未分類は専用キーを返す。
-// Topic hub nodeへのedgeを張る対象そのもの（クラスタ分けの基準ではなく、直接の親）。
-export function getPrimaryTopicId(concept: ConceptLike): string {
-  return concept.topicIds[0] ?? UNCLASSIFIED_CLUSTER;
-}
-
-// クラスタ分け（画面上でどのTopicファミリーに属するか）の基準は、Conceptの最初の
-// topicIdが属するルートTopic。topicIdsが空（未分類）のConceptは専用の「未分類」
-// クラスタに入れる。
+// 色分け・ツリー単位分けの基準は、Conceptの最初のtopicIdが属するルートTopic。
+// topicIdsが空（未分類）のConceptは専用の「未分類」ツリーに入れる。
 export function getClusterKey(concept: ConceptLike, topics: TopicLike[]): string {
   const primaryTopicId = concept.topicIds[0];
   if (!primaryTopicId) return UNCLASSIFIED_CLUSTER;
@@ -69,158 +44,89 @@ export function getClusterKey(concept: ConceptLike, topics: TopicLike[]): string
 
 export type Point = { x: number; y: number };
 
-// クラスタの中心点を外周円上に配置する。d3-forceの「引き寄せ先」として使うだけで、
-// 最終座標そのものではない（各クラスタ内部の配置はforceLink/forceManyBody/forceCollideが決める）。
-export function computeClusterCenters(clusterKeys: string[]): Map<string, Point> {
-  const clusterCount = Math.max(clusterKeys.length, 1);
-  const radius = Math.max(260, clusterCount * 130);
-  const angleStep = (2 * Math.PI) / clusterCount;
+// Node sizeは「理解構造上の階層」を第一基準にする（relation数・Knowledge数を主基準にしない）。
+// 階層が一目で分かるよう、Root Topic > Subtopic > Concept > Knowledgeの差を明確に付ける。
+export const ROOT_TOPIC_BASE_SIZE = 60;
+export const SUBTOPIC_BASE_SIZE = 48;
+export const CONCEPT_BASE_SIZE = 38;
+export const KNOWLEDGE_NODE_WIDTH = 132;
+export const KNOWLEDGE_NODE_HEIGHT = 30;
 
-  const centers = new Map<string, Point>();
-  clusterKeys.forEach((key, index) => {
-    const angle = index * angleStep;
-    centers.set(key, {
-      x: radius + radius * Math.cos(angle),
-      y: radius + radius * Math.sin(angle),
-    });
-  });
-  return centers;
+// 同階層内の補助差（あくまで基本サイズへの小さな上乗せにとどめる。主基準は階層そのもの）。
+export function computeRootTopicSize(childCount: number): number {
+  return ROOT_TOPIC_BASE_SIZE + Math.min(8, childCount * 1.2);
 }
 
-// Concept重要度（紐づくKnowledge数＋関係数）から、視覚サイズと衝突判定の両方に使う半径を求める。
-// 差が極端にならないよう上限8でクランプする。
-export function computeConceptRadius(degree: number): number {
-  const sizeBoost = Math.min(degree, 8);
-  return 30 + sizeBoost * 2.4;
+export function computeSubtopicSize(childCount: number): number {
+  return SUBTOPIC_BASE_SIZE + Math.min(6, childCount * 1);
 }
 
-// Topic hub nodeの半径。root Topicほど大きく、深い階層ほど小さくする
-// （「Topic=大きな理解領域、Concept=具体的な対象」という主従関係を大きさでも表現する）。
-export function computeTopicRadius(depth: number, directConceptCount: number): number {
-  const base = depth === 0 ? 46 : depth === 1 ? 38 : 32;
-  return base + Math.min(directConceptCount, 6) * 1.5;
+export function computeConceptSize(knowledgeCount: number): number {
+  return CONCEPT_BASE_SIZE + Math.min(6, knowledgeCount * 1.5);
 }
 
-export type ForceNodeKind = "topic" | "concept";
-export type ForceLinkKind = "topicParent" | "topicConcept" | "conceptRelation";
+export type MapNodeKind = "rootTopic" | "subtopic" | "concept" | "knowledge";
 
-export interface ForceNodeInput {
+export interface HierarchyNodeInput {
   id: string;
-  kind: ForceNodeKind;
-  clusterKey: string;
-  radius: number;
+  kind: MapNodeKind;
+  width: number;
+  height: number;
 }
 
-export interface ForceLinkInput {
+export interface HierarchyEdgeInput {
+  id: string;
   source: string;
   target: string;
-  kind: ForceLinkKind;
 }
 
-interface SimNode extends ForceNodeInput {
-  x: number;
-  y: number;
-  vx?: number;
-  vy?: number;
-}
-
-const SIMULATION_TICKS = 300;
-
-// linkのkindごとに距離・強さを変える。topicParent/topicConceptは階層構造をはっきり
-// 見せるためやや短く強め、conceptRelationは「近すぎてどれが繋がっているか分からない」
-// ことを避けるためlinkの距離を長めに取る。
-function linkDistance(kind: ForceLinkKind): number {
-  switch (kind) {
-    case "topicParent":
-      return 90;
-    case "topicConcept":
-      return 110;
-    case "conceptRelation":
-      return 170;
-  }
-}
-
-function linkStrength(kind: ForceLinkKind): number {
-  switch (kind) {
-    case "topicParent":
-      return 0.6;
-    case "topicConcept":
-      return 0.45;
-    case "conceptRelation":
-      return 0.25;
-  }
-}
-
-// previousPositions（フィルタ変更前・ドラッグ後の位置）が渡された場合はwarm startとして使う。
-// 新規ノードはクラスタ中心付近にランダムな初期位置を与える。
-export function computeForceLayout(
-  nodes: ForceNodeInput[],
-  links: ForceLinkInput[],
-  clusterCenters: Map<string, Point>,
-  previousPositions?: Map<string, Point>,
+// 階層構造（Topic→Topic、Topic→Concept、Concept→Knowledge）だけをdagreに渡してレイアウトする。
+// ConceptRelation（横断的なつながり）はレイアウトには使わず、位置が決まった後に見た目だけの
+// 補助edgeとして重ねる（レイアウトを乱さないようにするため）。
+// 複数のルートTopicがある場合、dagreは非連結なグラフとしてまとめて配置する
+// （「すべて」表示時に複数の木が横に並ぶ）。
+export function computeHierarchyLayout(
+  nodes: HierarchyNodeInput[],
+  edges: HierarchyEdgeInput[],
+  direction: "LR" | "TB" = "LR",
 ): Map<string, Point> {
-  if (nodes.length === 0) return new Map();
+  const positions = new Map<string, Point>();
+  if (nodes.length === 0) return positions;
 
-  if (nodes.length === 1) {
-    return new Map([[nodes[0].id, { x: 0, y: 0 }]]);
-  }
-
-  if (nodes.length === 2) {
-    return new Map([
-      [nodes[0].id, { x: -90, y: 0 }],
-      [nodes[1].id, { x: 90, y: 0 }],
-    ]);
-  }
-
-  const simNodes: SimNode[] = nodes.map((n) => {
-    const previous = previousPositions?.get(n.id);
-    const center = clusterCenters.get(n.clusterKey) ?? { x: 0, y: 0 };
-    const seed = previous ?? {
-      x: center.x + (Math.random() - 0.5) * 40,
-      y: center.y + (Math.random() - 0.5) * 40,
-    };
-    return { ...n, x: seed.x, y: seed.y };
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({
+    rankdir: direction,
+    // ranksep: 階層間（Root Topic→Subtopic→Concept→Knowledge）の間隔。
+    // nodesep: 同じ階層内でのnode間の間隔。木同士が混ざらない程度の余白は欲しいが、
+    // 離れすぎて「複数の島」に見えないよう、控えめな値にとどめる。
+    ranksep: 70,
+    nodesep: 20,
+    marginx: 20,
+    marginy: 20,
   });
 
-  const nodeIds = new Set(simNodes.map((n) => n.id));
-  const validLinks = links.filter((l) => nodeIds.has(l.source) && nodeIds.has(l.target));
-
-  const simulation = forceSimulation(simNodes)
-    .force(
-      "link",
-      forceLink<SimNode, ForceLinkInput>(validLinks)
-        .id((d) => d.id)
-        .distance((d) => linkDistance((d as unknown as ForceLinkInput).kind))
-        .strength((d) => linkStrength((d as unknown as ForceLinkInput).kind)),
-    )
-    // 反発を強めにして、node同士が密集して「どのedgeがどれを繋いでいるか分からない」
-    // 状態を避ける（ユーザー指摘: node同士が近すぎる）。
-    .force("charge", forceManyBody().strength(-260))
-    .force(
-      "collide",
-      forceCollide<SimNode>().radius((d) => d.radius + 16),
-    )
-    .force(
-      "clusterX",
-      forceX<SimNode>((d) => clusterCenters.get(d.clusterKey)?.x ?? 0).strength(0.05),
-    )
-    .force(
-      "clusterY",
-      forceY<SimNode>((d) => clusterCenters.get(d.clusterKey)?.y ?? 0).strength(0.05),
-    )
-    .force("center", forceCenter(0, 0).strength(0.02))
-    .stop();
-
-  for (let i = 0; i < SIMULATION_TICKS; i++) {
-    simulation.tick();
+  for (const node of nodes) {
+    g.setNode(node.id, { width: node.width, height: node.height });
+  }
+  for (const edge of edges) {
+    g.setEdge(edge.source, edge.target);
   }
 
-  return new Map(simNodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+  dagre.layout(g);
+
+  for (const node of nodes) {
+    const pos = g.node(node.id);
+    if (!pos) continue;
+    // dagreはnodeの中心座標を返すが、React Flowのpositionは左上原点なので変換する。
+    positions.set(node.id, { x: pos.x - node.width / 2, y: pos.y - node.height / 2 });
+  }
+  return positions;
 }
 
 const TOPIC_COLOR_PALETTE = ["#2b6cb0", "#c0392b", "#2f855a", "#b7791f", "#6b46c1", "#00838f", "#ad1457", "#4e5d94"];
 
-// 出現順にトピック（クラスタ）へ色を割り当てる。未分類は常に固定のグレーにする
+// 出現順にトピック（ツリー）へ色を割り当てる。未分類は常に固定のグレーにする
 // （「他とは違う」ことが分かるようにするため、パレット循環の対象からは外す）。
 export function buildTopicColorMap(clusterKeys: string[]): Map<string, string> {
   const map = new Map<string, string>();
@@ -234,10 +140,4 @@ export function buildTopicColorMap(clusterKeys: string[]): Map<string, string> {
     paletteIndex++;
   }
   return map;
-}
-
-// Conceptの重要度（node sizeの根拠）＝紐づくKnowledge数＋関係数。
-export function computeConceptDegree(conceptId: string, knowledgeCount: number, relations: ConceptRelation[]): number {
-  const relationCount = relations.filter((r) => r.fromConceptId === conceptId || r.toConceptId === conceptId).length;
-  return knowledgeCount + relationCount;
 }
