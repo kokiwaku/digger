@@ -642,43 +642,410 @@
   overflow: hidden;
 }
 
-.map-growth-stats {
-  margin: 0 0 0.6rem;
-  font-size: 0.82rem;
-  color: #555;
+/* 「自分の理解」ページを開いているときだけ、Map用の3ペインレイアウトが収まるよう
+   コンテナを広げる（他の画面は既存の640pxの会話中心レイアウトのまま）。 */
+.page-wide {
+  max-width: 1100px;
 }
 
-.map-topic-filters {
+.understanding-view-map {
+  max-width: none;
+}
+
+.map-summary-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  align-items: center;
+  gap: 0.5rem 1rem;
   margin-bottom: 0.75rem;
 }
 
-.map-topic-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+.map-summary-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.map-summary-stats strong {
+  color: #1a1a1a;
+  font-size: 0.95rem;
+}
+
+.map-summary-recent {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #777;
+}
+
+.map-toolbar-buttons {
+  margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.map-refresh-button {
   background: #fff;
   border: 1px solid #ddd;
   border-radius: 999px;
-  padding: 0.25rem 0.65rem;
+  padding: 0.35rem 0.8rem;
   font-size: 0.78rem;
-  color: #444;
+  color: #333;
   cursor: pointer;
 }
 
-.map-topic-chip.active {
+.map-refresh-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.map-small-state-hint {
+  margin-top: 0.75rem;
+  font-size: 0.82rem;
+  color: #666;
+}
+
+.understanding-map-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: stretch;
+  position: relative;
+}
+
+.map-mobile-nav-toggle {
+  display: none;
+}
+
+.map-topic-nav {
+  width: 190px;
+  flex-shrink: 0;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  padding: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.map-topic-nav-header {
+  display: none;
+}
+
+.map-topic-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: #333;
+  cursor: pointer;
+}
+
+.map-topic-nav-item.active {
   background: #1a1a1a;
-  border-color: #1a1a1a;
   color: #fff;
 }
 
-.map-topic-chip-dot {
+.map-topic-nav-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.map-topic-nav-tree {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+}
+
+.map-topic-nav-children {
+  padding-left: 0.75rem;
+  border-left: 1px solid #eee;
+  margin-left: 0.4rem;
+}
+
+.concept-map {
+  flex: 1 1 0%;
+  width: auto;
+  height: 560px;
+}
+
+/* Concept node（React FlowのCustom Node、ConceptNode.tsx）。
+   丸いカード状のnodeにConcept名とKnowledge数だけを表示し、Knowledge本文は表示しない。 */
+.concept-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid #2b6cb0;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  padding: 0.35rem;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    opacity 0.15s ease,
+    box-shadow 0.15s ease,
+    border-width 0.15s ease;
+}
+
+.concept-node-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #1a1a1a;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.concept-node-count {
+  margin-top: 0.15rem;
+  font-size: 0.58rem;
+  color: #999;
+}
+
+/* hover中のnode、およびhover対象と直接つながるnodeを強調する。 */
+.concept-node-highlighted {
+  border-width: 3px;
+  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.35);
+  z-index: 2;
+}
+
+/* hover中は、関係の無いnodeを控えめに薄くして関係を追いやすくする。 */
+.concept-node-dimmed {
+  opacity: 0.25;
+}
+
+.concept-node-badge {
+  position: absolute;
+  top: -6px;
+  right: 2px;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  background: #2b6cb0;
+  color: #fff;
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+/* Topic hub node（React FlowのCustom Node、TopicNode.tsx）。ConceptNodeより大きく、
+   塗りつぶし気味の円にすることで「Topic=大きな理解領域」を視覚的に主張する。
+   Topic->ConceptのedgeがこのnodeとConcept nodeを直接結ぶため、親子関係が線で見える。 */
+.topic-hub-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid #2b6cb0;
+  text-align: center;
+  padding: 0.3rem;
+  cursor: pointer;
+  transition:
+    opacity 0.15s ease,
+    box-shadow 0.15s ease,
+    border-width 0.15s ease;
+}
+
+.topic-hub-node-name {
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.topic-hub-node-highlighted {
+  border-width: 3px;
+  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.3);
+  z-index: 2;
+}
+
+.topic-hub-node-dimmed {
+  opacity: 0.3;
+}
+
+.concept-detail-panel-wrapper {
+  width: 320px;
+  flex-shrink: 0;
+}
+
+.concept-detail-panel {
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  padding: 1rem;
+  height: 560px;
+  overflow-y: auto;
+}
+
+.concept-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.concept-detail-header h3 {
+  margin: 0;
+}
+
+.concept-detail-breadcrumb {
+  margin: 0.15rem 0 0.9rem;
+  font-size: 0.78rem;
+  color: #888;
+}
+
+.concept-detail-section-title {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.82rem;
+  color: #555;
+}
+
+.concept-detail-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.concept-detail-knowledge-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.concept-detail-knowledge-statement {
+  margin: 0 0 0.25rem;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.concept-detail-knowledge-meta {
+  margin: 0;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.concept-detail-related-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.map-mobile-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .understanding-map-layout {
+    flex-direction: column;
+  }
+
+  .map-mobile-nav-toggle {
+    display: inline-block;
+    align-self: flex-start;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 999px;
+    padding: 0.3rem 0.75rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .map-topic-nav {
+    display: none;
+  }
+
+  .map-topic-nav.map-topic-nav-mobile-open {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 240px;
+    z-index: 20;
+    border-radius: 0;
+    overflow-y: auto;
+  }
+
+  .map-topic-nav-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+    font-weight: 700;
+  }
+
+  .map-mobile-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 15;
+  }
+
+  .map-mobile-backdrop-hidden {
+    display: none;
+  }
+
+  .concept-map {
+    /* .understanding-map-layoutがcolumn方向のflexになるため、baseの`flex: 1 1 0%`の
+       flex-basis（column方向では高さの基準になる）がheightより優先されてしまい、
+       0pxに潰れてしまう。ここでflexをリセットしてheightを効かせる。 */
+    flex: none;
+    width: 100%;
+    height: 420px;
+  }
+
+  .concept-detail-panel-wrapper {
+    display: none;
+  }
+
+  .concept-detail-panel-wrapper.map-mobile-open {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    z-index: 20;
+    max-height: 70vh;
+  }
+
+  .concept-detail-panel-wrapper.map-mobile-open .concept-detail-panel {
+    height: auto;
+    max-height: 70vh;
+    border-radius: 14px 14px 0 0;
+  }
 }
 
 /* Knowledge詳細モーダル */
