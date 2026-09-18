@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, createPartFromBase64, createUserContent } from "@google/genai";
 import { LlmProviderError } from "./llmProviderError.js";
 import type { GenerateTextInput, LlmProvider } from "./llmProvider.js";
 
@@ -87,9 +87,19 @@ export class VertexGeminiProvider implements LlmProvider {
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
+      // 画像が無ければ従来通りプロンプト文字列そのままを渡す。画像がある場合だけ
+      // createUserContent()でプロンプト文字列と画像パートをまとめたマルチモーダル
+      // コンテンツを組み立てる（`@google/genai`固有の型・処理はこのファイルに閉じ込める）。
+      const contents = input.images?.length
+        ? createUserContent([
+            input.prompt,
+            ...input.images.map((image) => createPartFromBase64(image.data, image.mimeType)),
+          ])
+        : input.prompt;
+
       const response = await this.client.models.generateContent({
         model: this.model,
-        contents: input.prompt,
+        contents,
         config: {
           systemInstruction: input.systemPrompt,
           abortSignal: controller.signal,

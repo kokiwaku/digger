@@ -34,27 +34,53 @@ function truncateContent(content: string): string {
   return `${content.slice(0, MAX_CONTENT_LENGTH)}\n\n（以降は文字数上限のため省略）`;
 }
 
-function buildPrompt(input: ArticleAnalysisInput, extraInstruction?: string): string {
-  const content = truncateContent(input.content);
-
-  const base = `以下の記事を解析してください。
-
-# 記事情報
-タイトル: ${input.title}
-URL: ${input.url}
-
-# 記事本文
-${content}
-
-# 出力ルール
-- summary: 最大3文で記事内容を簡潔に説明する日本語の要約。見出しの言い換えだけにしないこと。ユーザーはこの3文だけをまず読むため、簡潔さを優先する。
-- whyItMatters: 最大3文。「何が起きたか」の繰り返しではなく、なぜこの出来事・テーマを知る意味があるのかを説明する。ユーザーの日常・社会・経済・技術等への影響が記事から合理的に説明できる場合は含めてよいが、根拠がない場合は誇張しない。
-- concepts: 記事を理解するために必要な前提知識を3〜6件。単なるキーワード列挙にしない（悪い例: 「東京」「9月」「会見」、良い例: 「政策金利」「中央銀行」「為替」）。descriptionは初学者向けに1〜2文の短い説明にする。importanceは"required"（これを知らないと記事の重要部分を理解しづらい）または"helpful"（知っていると理解が深まる）のいずれか。
-- entities: 記事理解に重要な人物・組織・場所・出来事のみ。大量に列挙しない。
-- connections: 記事のテーマと、より大きな社会・経済・技術等のテーマとの関係。記事本文から大きく逸脱した推測的な関連付けは避ける。
+// summary/whyItMatters/concepts/entities/connections/deepDiveQuestionsの出力ルールは
+// 入力形式（URL記事/貼り付けテキスト/画像）に依らず共通。ここだけ切り出して重複を避ける。
+const OUTPUT_RULES = `# 出力ルール
+- summary: 最大3文で内容を簡潔に説明する日本語の要約。見出しの言い換えだけにしないこと。ユーザーはこの3文だけをまず読むため、簡潔さを優先する。
+- whyItMatters: 最大3文。「何が書かれているか」の繰り返しではなく、なぜこの出来事・テーマを知る意味があるのかを説明する。ユーザーの日常・社会・経済・技術等への影響が合理的に説明できる場合は含めてよいが、根拠がない場合は誇張しない。
+- concepts: 内容を理解するために必要な前提知識を3〜6件。単なるキーワード列挙にしない（悪い例: 「東京」「9月」「会見」、良い例: 「政策金利」「中央銀行」「為替」）。descriptionは初学者向けに1〜2文の短い説明にする。importanceは"required"（これを知らないと重要部分を理解しづらい）または"helpful"（知っていると理解が深まる）のいずれか。
+- entities: 理解に重要な人物・組織・場所・出来事のみ。大量に列挙しない。
+- connections: 内容のテーマと、より大きな社会・経済・技術等のテーマとの関係。本文・画像から大きく逸脱した推測的な関連付けは避ける。
 - deepDiveQuestions: ユーザーが次に質問すると理解が一段深まる問いを最大4件。単純な事実確認だけでなく「なぜ？」「どういう仕組み？」「以前と何が違う？」「誰にどう影響する？」を優先する。最初の1件は他より優先して提示すべき、最も理解を深める問いにする。
 
 指定されたJSON schemaに厳密に従ってJSON形式のみで出力してください。`;
+
+// URL記事・貼り付けテキストはどちらも「テキストを解析する」という点で同じプロンプト構造を
+// 使う（urlが無ければその行を省く）。画像は別のプロンプト（buildImagePrompt）を使う。
+function buildTextPrompt(input: ArticleAnalysisInput, extraInstruction?: string): string {
+  const content = truncateContent(input.content ?? "");
+  const metaLines = [input.title && `タイトル: ${input.title}`, input.url && `URL: ${input.url}`]
+    .filter(Boolean)
+    .join("\n");
+
+  const base = `以下の${input.url ? "記事" : "テキスト"}を解析してください。
+${metaLines ? `\n# 記事情報\n${metaLines}\n` : ""}
+# ${input.url ? "記事本文" : "テキスト"}
+${content}
+
+${OUTPUT_RULES}`;
+
+  return extraInstruction ? `${base}\n\n${extraInstruction}` : base;
+}
+
+// 画像には「グラフ/SNSスクリーンショット/新聞紙面/写真中の文章」など様々なものが入りうる。
+// OCRしてテキスト化するだけでなく、画像そのものの意味（軸・傾向・文脈・主張等）まで
+// 読み取らせる。画像から読み取れない内容を勝手に補わないよう明記する。
+function buildImagePrompt(caption: string | undefined, extraInstruction?: string): string {
+  const base = `添付された画像を解析してください。画像には、ニュース記事のスクリーンショット・SNS投稿・
+新聞紙面・グラフや図表・書類や資料の写真など、様々なものが写っている可能性があります。
+
+まず画像の種類に応じて、次のように読み取ってください。
+- グラフ・図表: 軸が何を表しているか、全体の傾向、目立つ変化、特に重要なポイント
+- SNSの投稿・スクリーンショット: 投稿内容、分かる範囲の文脈、主張
+- 新聞・記事の紙面: 見出し、本文の要点、添えられた図表
+- その他の写真・文章の写った画像: 写っている内容とその文脈
+
+画像から実際に読み取れる内容だけを根拠にし、書かれていない・写っていない内容を推測で
+事実として扱わないでください。文字が読み取れない・不明瞭な部分は無理に補完しないでください。
+${caption ? `\n# ユーザーからの補足\n${caption}\n` : ""}
+${OUTPUT_RULES}`;
 
   return extraInstruction ? `${base}\n\n${extraInstruction}` : base;
 }
@@ -63,10 +89,12 @@ const RETRY_INSTRUCTION =
   "前回の出力がschemaに適合しなかったため、指定schemaに厳密に従って再生成してください。";
 
 async function requestOnce(provider: LlmProvider, input: ArticleAnalysisInput, extraInstruction?: string) {
+  const prompt = input.image ? buildImagePrompt(input.content, extraInstruction) : buildTextPrompt(input, extraInstruction);
   const text = await provider.generateText({
     systemPrompt: SYSTEM_PROMPT,
-    prompt: buildPrompt(input, extraInstruction),
+    prompt,
     responseJsonSchema: articleAnalysisJsonSchema,
+    images: input.image ? [input.image] : undefined,
   });
 
   let parsedJson: unknown;
@@ -102,7 +130,8 @@ export function createVertexArticleAnalysisService(
       const model = process.env.GEMINI_MODEL ?? "(unset)";
       const startedAt = Date.now();
 
-      console.log("[ArticleAnalysis] start", { provider: providerName, model, url: input.url });
+      const inputKind = input.image ? "image" : input.url ? "url" : "text";
+      console.log("[ArticleAnalysis] start", { provider: providerName, model, inputKind, url: input.url });
 
       const first = await requestOnce(provider, input);
       if (first.success) {

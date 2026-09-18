@@ -25,7 +25,8 @@ frontend/
 │   ├── mapLayout.ts       # dagreによるMapの階層レイアウト計算（Reactに依存しない純粋ロジック）
 │   ├── TopicNode.tsx      # React FlowのCustom Node（Root Topic / Subtopic共用の丸node）
 │   ├── ConceptNode.tsx    # React FlowのCustom Node（Concept node本体）
-│   ├── KnowledgeNode.tsx  # React FlowのCustom Node（Knowledge leaf、角丸pill）
+│   ├── KnowledgeNode.tsx  # React FlowのCustom Node（Knowledge leaf、小さなdot＋短いcaption）
+│   ├── sourceLabel.ts     # DigSource（URL/テキスト/画像）の表示用title・fallback文言を1箇所にまとめる
 │   ├── App.css          # App.tsx・UnderstandingPage.tsx・UnderstandingMapView.tsx共通のスタイル
 │   ├── types.ts          # /api/dig 等のリクエスト/レスポンス型
 │   └── vite-env.d.ts   # Vite用の型定義（import.meta.env等）
@@ -68,13 +69,15 @@ flowchart TD
 - **`DigPage.tsx`**（`App.tsx`から分離、内容は従来通り）:
   - タイトル「Digger」の左に`brand-icon`としてモグラのアイコン（`public/assets/frames/mole-icon.png`）を表示します（`alt=""` + `aria-hidden="true"`で装飾画像として扱い、スクリーンリーダーには読み上げさせません）。`mole-icon.png`は`mole-dig-1.png`（512x512、MoleLoaderの静止フレームと共用の元画像）から、透明ピクセルの外接矩形で切り抜いた上でその向きに合わせた最小限の余白のみを残したものです。元画像はキャラクター周囲の透明な余白が大きく、そのまま40px前後の小サイズで縮小表示するとキャラクターが小さく見えすぎる問題があったため、このアイコン専用に切り抜き直しました（`MoleLoader`側は96px/72pxと表示サイズが大きいため`mole-dig-1.png`のままで問題なく、変更していません）。ファビコンの3ファイルも同じ`mole-icon.png`から生成しています。（※ブランドアイコン自体は現在`AppShell.tsx`のサイドバー/モバイルヘッダー側に表示されます。この説明は元々のアイコン切り抜きの経緯として残しています。）
   - `API_BASE_URL` は `import.meta.env.VITE_API_BASE_URL`（未設定時は `http://localhost:8787` にフォールバック）。
-  - フォームでURLを入力し「掘る」を押すと `digUrl()` が `POST /api/dig` を呼び出します。バックエンドが実際にURLへアクセスして抽出した`title`と、Article Analysis（backendの`LLM_PROVIDER`に応じてモックまたはVertex AI Geminiによる実解析）の結果が表示されます。ローディング中は`MoleLoader`コンポーネント（後述）が「記事を掘っています…」と表示します。
+  - **Composer（URL/テキスト/画像を1つの入力欄で受け付ける）**: Diggerは「URLを入れること」自体を価値にしないため、tab切り替えではなく1つのComposer（`<textarea>`＋画像添付ボタン＋「掘る」ボタン）で、URL・貼り付けテキスト・画像のいずれも受け付けます。URLかテキストかをユーザーに選ばせる必要はなく、送信時にbackendの`resolveInputSource()`が自動判定します（frontend側の`detectInputKind()`はローディング文言の出し分けだけに使う軽い判定で、最終的な判定はbackend側が権威を持ちます）。画像は`<input type="file" accept="image/jpeg,image/png,image/webp">`（隠し要素、「+ 画像を追加」ボタンから開く）で選び、選択直後にmime/サイズ（8MB）をclient側でも検証してから`URL.createObjectURL()`によるプレビューを表示します（実際にbackendへ送るのは「掘る」を押した時点で、`FileReader.readAsDataURL()`によりbase64化してから`POST /api/dig`の`image: { data, mimeType }`に載せます）。プレビュー用のオブジェクトURLは、画像の差し替え・削除・コンポーネントのアンマウント時に必ず`URL.revokeObjectURL()`で解放します。送信に成功したらComposerをクリアしますが、失敗時は入力し直せるようテキスト・画像とも残します。
+  - `digContent({ input, image? })` が `POST /api/dig` を呼び出します。バックエンドが入力形式（URL/テキスト/画像）に応じて取得・解析し、Article Analysis（backendの`LLM_PROVIDER`に応じてモックまたはVertex AI Geminiによる実解析。画像はGeminiのマルチモーダル入力で直接解析され、OCR専用処理は別途実装していません）の結果が表示されます。ローディング中の`MoleLoader`（後述）のラベルは入力形式ごとに変えています（`LOADING_LABELS`）: URLは「記事を掘っています…」、テキストは「内容を整理しています…」、画像は「画像をじっくり見ています…」。
   - 状態は `DigState`（`idle` / `loading` / `error` / `success`）という判別可能なユニオン型1つで管理し、状態管理ライブラリは使わず `useState` のみです。
+  - **`DigSource`の一般化**: 以前は`source`が常に`{type:"web_article",url,title}`固定でしたが、`text`/`image`という入力にはURLが無いため、`DigSource`（`frontend/src/types.ts`、backend側`knowledgeSource.ts`と対になる型）を判別可能なユニオンへ拡張しました。`text`/`image`には`title`が無いことがあるため、`sourceLabel.ts`の`sourceDisplayTitle()`が「テキスト入力」「画像入力」というfallback表示を1箇所にまとめ、`DigPage.tsx`（結果ヘッダー）・`UnderstandingPage.tsx`（一覧・詳細モーダル）・`UnderstandingMapView.tsx`（Detail Panel）の3箇所で共通利用しています。`source.type === "web_article"`のときだけ元記事へのリンクを表示し、それ以外はプレーンテキストで表示します（存在しないURLへリンクを張らないため）。
   - **情報カード中心から会話中心へ**: Diggerの差別化は「大量のカードや機能を見せること」ではなく「今読んでいる記事を理解している」「会話から理解を深める」という裏側の体験にある、という方針のもと、表側のUIは`hasStartedChat`（`messages.length > 0`から導出。stateとしては持たない）を境に2つの画面に分かれます。**ArticleAnalysisのデータ自体・`DeepDiveInput`/`DeepDiveResponse`の型は変更していません**（表側は簡素化、裏側に渡すコンテキストは従来通り豊富なまま）。
     - **AI主導の「次の質問」提案は一切表示しない**: `deepDiveQuestions`（記事解析結果）も`suggestedFollowUps`（Deep Dive回答）も、Diggerの「ユーザー自身の疑問を起点に掘る」という方針に反するため、UI上には一切表示しません。バックエンドは引き続き生成・返却しており、`DigResult`/`DeepDiveResponse`の型・schemaも変更していません（frontendが単に無視しているだけです）。次のアクションは常に自由入力のみです。
-    - **Pre-chat Primary View**（`!hasStartedChat`）: 記事情報は`summary`の冒頭3文（`firstSentences()`というローカル関数で文末（。！？）区切りに冒頭N文だけ切り出す）を、カードや枠を持たない地の文として表示するだけです。主役は「この記事について、何が気になりますか？」という一言の下にある大きめの`<textarea>`（`DeepDiveInputForm`コンポーネント、Enterで送信・Shift+Enterで改行）です。`whyItMatters`・`concepts`（名前を含め一切）・`connections`・`entities`はここでは一切出しません。
-    - **補助UI**（初期は非表示、Pre-chat Primary Viewのみに存在。AI主導の質問提案とは無関係な、記事の背景情報のみを扱う）: ①「前提知識を見る」→`concepts`の名前だけをプレーンテキストのリンク風の行として並べ（カード化しない）、`ConceptDisclosure`コンポーネントによりクリックした概念だけ説明文を展開する2段階の開示。②「この記事の背景」→`whyItMatters`全文・`connections`・`entities`をまとめたパネル。どちらも既定では閉じています。
-    - **Chat View**（`hasStartedChat`）: 最初の質問を送った瞬間、記事情報・前提知識・背景パネルは全て非表示になり、画面はほぼ会話のみになります（タイトル行と、任意で開ける「記事の要点を見る」だけが記事の目印として残る）。ユーザーの発言は右寄せの吹き出し、Diggerの回答はカードや枠を持たない地の文（ChatGPTに近い見た目）で表示するだけで、回答の下には何も続きません（`suggestedFollowUps`は受け取った`DeepDiveResponse`から読み捨てており、`ChatMessage`型にも保持しません）。
+    - **Pre-chat Primary View**（`!hasStartedChat`）: 記事情報は`summary`の冒頭3文（`firstSentences()`というローカル関数で文末（。！？）区切りに冒頭N文だけ切り出す）を、カードや枠を持たない地の文として表示するだけです。主役は「気になることを聞いてみましょう」（以前は「この記事について、何が気になりますか？」でしたが、URL以外の入力にも自然な文言へ一般化しました）という一言の下にある大きめの`<textarea>`（`DeepDiveInputForm`コンポーネント、Enterで送信・Shift+Enterで改行）です。`whyItMatters`・`concepts`（名前を含め一切）・`connections`・`entities`はここでは一切出しません。
+    - **補助UI**（初期は非表示、Pre-chat Primary Viewのみに存在。AI主導の質問提案とは無関係な、背景情報のみを扱う）: ①「前提知識を見る」→`concepts`の名前だけをプレーンテキストのリンク風の行として並べ（カード化しない）、`ConceptDisclosure`コンポーネントによりクリックした概念だけ説明文を展開する2段階の開示。②「背景を見る」（以前は「この記事の背景」）→`whyItMatters`全文・`connections`・`entities`をまとめたパネル。どちらも既定では閉じています。
+    - **Chat View**（`hasStartedChat`）: 最初の質問を送った瞬間、記事情報・前提知識・背景パネルは全て非表示になり、画面はほぼ会話のみになります（タイトル行と、任意で開ける「要点を見る」（以前は「記事の要点を見る」）だけが目印として残る）。ユーザーの発言は右寄せの吹き出し、Diggerの回答はカードや枠を持たない地の文（ChatGPTに近い見た目）で表示するだけで、回答の下には何も続きません（`suggestedFollowUps`は受け取った`DeepDiveResponse`から読み捨てており、`ChatMessage`型にも保持しません）。
     - **自由入力欄（`DeepDiveInputForm`）**: pre-chat/chat両方で共有する小さなコンポーネントで、`<textarea rows={3}>`（横幅いっぱい、`resize: vertical`）＋送信ボタンで構成されます。Enterキー押下（Shift未併用）で送信、Shift+Enterで改行、送信中は入力欄・ボタンとも無効化、空文字は送信不可です。プレースホルダーは特定の質問例に寄せすぎないよう「分からないことを、そのまま書いてください」（pre-chat）「さらに気になることを入力してください」（chat）としています。
     - 自由入力欄から質問すると`handleDeepDive(questionText)`が呼ばれ、`askDeepDive()`（`POST /api/deep-dive`）を叩きます。送信のたびに、それまでの`messages`を`{ role, content }[]`に変換して`conversationHistory`として一緒に送ります（backendへ渡す文脈の豊富さは変えていません）。ページ遷移はせず、`messages`にユーザーの質問とDiggerの回答を追記していくだけです。深掘り用のローディング/エラー状態は`DeepDiveState`という別のstateで、記事解析の`DigState`とは独立しています。
     - **「今回わかったことを残す」（Knowledge Extraction）**: Chat Viewの入力欄の下に、控えめな`link-button`として表示されます（常時大きなKnowledge UIは出さない方針）。表示条件は`messages.some(m => m.role === "assistant")`（少なくとも1往復の会話があること）で、押すたびに`handleExtractKnowledge()`が`extractKnowledge()`（`POST /api/knowledge/extract`）を呼び、会話ログ全体（`messages`）を渡します。抽出中は`NoteMoleLoader`（後述、「わかったことを整理中…」）を表示します。
@@ -131,7 +134,7 @@ flowchart TD
   - **Empty State**: active Conceptが0件のときは、モグラのアイコンと「理解マップを更新」ボタンだけを表示する専用の軽量表示にしています（Concept未作成＝多くの場合まだ一度もrefreshを実行していない状態のため）。
   - **レスポンシブ**: デスクトップは検索/Topicフィルタ行＋Map＋Detail Panelの縦積み＋横flex構成。検索はテキスト入力、Topicフィルタはボタンの折り返しなので、モバイルでも同じUIでそのまま操作できます（専用のドロワーは不要。Topicフィルタで選択Topicのsubtreeだけに絞り込む操作自体が、モバイルでの「今見たい範囲だけ表示する」navigationを兼ねています）。Detail Panelだけはモバイルでノードクリック時に下からのシート風パネルになります（既存の`.modal-overlay`的な考え方をCSSだけで再現したもので、新しいジェスチャーライブラリは導入していません）。
   - **旧「トピック」タブとの橋渡し（ベストエフォート）**: 旧トピックタブの「この分野をマップで見る」で渡されるトピック名文字列と、新モデルのTopic名が一致すれば、そのTopicが属するルートTopicをTopicフィルタの初期値として使います（`initialTopicName` prop、`findRootTopicId()`）。2つの分類システムは独立しているため、一致しない場合は「すべて」表示にフォールバックします。
-- **`types.ts`**: `/api/dig`・`/api/deep-dive`・`/api/knowledge/extract`・`GET /api/knowledge`・`GET /api/understanding-map` のレスポンス型（`DigResult` / `DigSource` / `ArticleAnalysis` / `Concept` / `Entity` / `Connection` / `ConversationTurn` / `DeepDiveResponse` / `KnowledgeCandidate` / `SavedKnowledge` / `KnowledgeRelationOut` / `Topic` / `UnderstandingConcept` / `ConceptRelationType` / `ConceptRelation`）を定義。backend側の `src/types.ts`・`src/llm/*.ts`・`src/topic.ts`・`src/concept.ts`・`src/conceptRelation.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。`UnderstandingConcept`という名前にしているのは、Article Analysisの前提知識カード用に既存の`Concept`型が使われているため（名前の衝突を避けるための別名）。チャットUI用の`ChatMessage`型（`DigPage.tsx`内のローカル型）は`{ role, content }`のみを持ち、`suggestedFollowUps`は保持しません（UIで使わないため）。
+- **`types.ts`**: `/api/dig`・`/api/deep-dive`・`/api/knowledge/extract`・`GET /api/knowledge`・`GET /api/understanding-map` のレスポンス型（`DigResult` / `DigSource` / `ArticleAnalysis` / `Concept` / `Entity` / `Connection` / `ConversationTurn` / `DeepDiveResponse` / `KnowledgeCandidate` / `SavedKnowledge` / `KnowledgeRelationOut` / `Topic` / `UnderstandingConcept` / `ConceptRelationType` / `ConceptRelation`）を定義。backend側の `src/types.ts`・`src/llm/*.ts`・`src/topic.ts`・`src/concept.ts`・`src/conceptRelation.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。`UnderstandingConcept`という名前にしているのは、Article Analysisの前提知識カード用に既存の`Concept`型が使われているため（名前の衝突を避けるための別名）。チャットUI用の`ChatMessage`型（`DigPage.tsx`内のローカル型）は`{ role, content }`のみを持ち、`suggestedFollowUps`は保持しません（UIで使わないため）。`DigSource`は`{type:"web_article",url,title} | {type:"text",title?} | {type:"image",title?}`という判別可能なユニオンで、backend側`knowledgeSource.ts`の`knowledgeSourceSchema`と対になります。
 - **`App.css`**: 余白の広いシンプルなレイアウト。`flex-wrap` と相対単位でスマホ幅でも崩れないようにしています。CSSフレームワーク等は未導入です。ページ間の幅の揺れ（ガタつき）を防ぐため、外枠の幅は`.app-main`（`max-width: 1100px`、ルートに関わらず常に同じ）が一元管理し、ページごとの見た目の違いは内側のラッパーだけで表現します：「掘る」は`.dig-page-inner`（`max-width: 640px`）、「自分の理解」の最近/トピックは`.understanding-view`（`max-width: 720px`）、マップだけは`.understanding-view-map`でこの上限を`max-width: none`に戻し`.app-main`いっぱいまで使います。
 
 ## 環境変数（`.env`）
@@ -170,18 +173,18 @@ npm install
 npm run dev
 ```
 
-`http://localhost:5173` を開き、URL入力欄に記事URLを入れて「掘る」を押すと、実際に取得したタイトルとArticle Analysisの解析結果が表示されます（backendが`LLM_PROVIDER=mock`なら日銀の利上げに関する固定デモデータ、`LLM_PROVIDER=vertex`なら実際の記事内容に応じたVertex AI Geminiの解析結果）。バックエンドが起動していない、またはURLが不正だとエラーメッセージが表示されます。「この記事について、何が気になりますか？」欄から自由入力で質問すると、その場でチャット形式の深掘りができます（`LLM_PROVIDER=vertex`なら記事とこれまでの会話を踏まえたVertex AI Geminiの回答、`mock`なら固定応答）。
+`http://localhost:5173` を開き、Composerの入力欄にURL・貼り付けテキスト・画像のいずれかを入れて「掘る」を押すと、実際に取得・解析した結果が表示されます（backendが`LLM_PROVIDER=mock`なら日銀の利上げに関する固定デモデータ、`LLM_PROVIDER=vertex`なら実際の入力内容に応じたVertex AI Geminiの解析結果。画像はGeminiのマルチモーダル入力でそのまま解析されます）。バックエンドが起動していない、またはURLが不正・画像が対応形式外だとエラーメッセージが表示されます。「気になることを聞いてみましょう」欄から自由入力で質問すると、その場でチャット形式の深掘りができます（`LLM_PROVIDER=vertex`ならAnalysis結果とこれまでの会話を踏まえたVertex AI Geminiの回答、`mock`なら固定応答）。
 
 ## 今後の拡張ポイント（未実装）
 
-- Chat Viewから「前提知識を見る」「この記事の背景」相当の情報に戻れる導線（現状は「記事の要点を見る」で短い要約だけ再表示可能。前提知識・背景はChat View突入後は見られない）
+- Chat Viewから「前提知識を見る」「背景を見る」相当の情報に戻れる導線（現状は「要点を見る」で短い要約だけ再表示可能。前提知識・背景はChat View突入後は見られない）
 - 保存済みKnowledgeのきちんとした一覧UI（現状は「保存済みの理解を見る（テスト表示）」という動作確認用の暫定表示のみ。デザイン・ページネーション・編集/削除等は未実装で、いずれ作り直すか削除する前提）
-- エラー種別（`400`/`403`/`422`/`502`）に応じたUIの出し分け（現状は全て同じ見た目。`/api/knowledge/*`も同様）
+- エラー種別（`400`/`403`/`413`/`422`/`502`）に応じたUIの出し分け（現状は全て同じ見た目。`/api/knowledge/*`も同様）
 - 深掘りの会話をリロード後も残すための永続化（現状はページをリロードすると消える）
-- ルーティング（現状はApp.tsx単一ページ）
 - 状態管理ライブラリ（現状はuseStateのみ）
 - UIコンポーネントの共通化・デザインシステム導入
-- APIクライアントの共通化（現状は `digUrl` 関数に `fetch` 直書き）
+- APIクライアントの共通化（現状は `digContent` 関数に `fetch` 直書き）
+- 入力方式のさらなる拡張（PDF・音声・動画）。backend側の`InputSource`/`GenerateTextInput.images`は拡張しやすい形にしてあるため（詳細は[`backend/README.md`](../backend/README.md)）、frontend側もComposerに新しい添付ボタンを足す程度で対応できる想定（今回は意図的にスコープ外）
 - frontend/backend間で重複しているレスポンス型の共有化
 - `POST /api/knowledge/save`（保存処理中）にも`NoteMoleLoader`を再利用する（`label`を変えて呼ぶだけで対応可能な構造にはなっているが、今回はKnowledge Extractionの抽出中のみで使用）
 - 「理解を更新する」（`updated`/`supersedes`）候補を保存した際に、実際に既存Knowledgeを`outdated`へ変更する導線（現状はbackendが自動遷移しないため、UI上も「更新候補」として見せるだけで、保存すると新しいKnowledgeが追加されるのみ）

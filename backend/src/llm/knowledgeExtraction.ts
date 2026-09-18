@@ -2,18 +2,15 @@ import { z } from "zod";
 import { articleAnalysisSchema } from "./articleAnalysis.js";
 import { conversationTurnSchema } from "./conversation.js";
 import { userKnowledgeSchema } from "./personalizedAnalysis.js";
+import { knowledgeSourceSchema } from "../knowledgeSource.js";
 
 // Knowledge Extraction: ユーザーが記事について深掘りした後の対話から、
 // 「今回新しく理解したと思われること」の保存"候補"を抽出する処理。
 // AIがユーザーの理解を勝手に確定してはいけないため、出力はあくまで候補であり、
 // 最終的にユーザーが確認して保存するかどうかを決める（保存は knowledgeRepository.ts が担当）。
 
-export const knowledgeSourceSchema = z.object({
-  type: z.literal("web_article"),
-  url: z.string(),
-  title: z.string(),
-});
-export type KnowledgeSource = z.infer<typeof knowledgeSourceSchema>;
+export { knowledgeSourceSchema } from "../knowledgeSource.js";
+export type { KnowledgeSource } from "../knowledgeSource.js";
 
 export const knowledgeExtractionInputSchema = z.object({
   source: knowledgeSourceSchema,

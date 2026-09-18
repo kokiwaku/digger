@@ -1,13 +1,32 @@
 import { z } from "zod";
 
-// Article Analysis: 記事そのものを客観的に解析する処理。
-// ユーザーの知識・履歴はここには一切渡さない（それはPersonalized Analysisの役割）。
-
-export const articleAnalysisInputSchema = z.object({
-  title: z.string(),
-  url: z.string(),
-  content: z.string(),
+// Article Analysis: 入力（記事URL・貼り付けテキスト・画像のいずれか）そのものを
+// 客観的に解析する処理。ユーザーの知識・履歴はここには一切渡さない
+// （それはPersonalized Analysisの役割）。
+//
+// 元々はURL記事専用（title/url/contentすべて必須）だったが、Diggerの入力方式を
+// テキスト貼り付け・画像へ拡張したことに伴い一般化した。URL記事はcontentに本文、
+// 貼り付けテキストもcontentにそのまま入れる（同じ「テキストを解析する」処理として扱える
+// ため、Service側の分岐は最小限で済む）。画像はcontent無しでimageだけを渡す
+// （マルチモーダル入力、LlmProvider.generateText()のimages経由）。
+// content/imageのどちらか一方は必須（refineで強制）。
+export const articleAnalysisImageInputSchema = z.object({
+  data: z.string(), // base64エンコードされた画像データ（data URLのprefixは含まない）
+  mimeType: z.string(),
 });
+export type ArticleAnalysisImageInput = z.infer<typeof articleAnalysisImageInputSchema>;
+
+export const articleAnalysisInputSchema = z
+  .object({
+    // URL記事の場合のみ意味を持つ。貼り付けテキスト・画像には無い（無くても解析はできる）。
+    title: z.string().optional(),
+    url: z.string().optional(),
+    content: z.string().optional(),
+    image: articleAnalysisImageInputSchema.optional(),
+  })
+  .refine((data) => Boolean(data.content) || Boolean(data.image), {
+    message: "content or image is required",
+  });
 export type ArticleAnalysisInput = z.infer<typeof articleAnalysisInputSchema>;
 
 const conceptSchema = z.object({

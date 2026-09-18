@@ -67,14 +67,23 @@ function formatExistingKnowledge(existingKnowledge: KnowledgeExtractionInput["ex
   return existingKnowledge.map((k) => `- [id: ${k.id}] ${k.concept}: ${k.statement}`).join("\n");
 }
 
+// sourceはURL記事だけでなく貼り付けテキスト・画像の場合もあるため、種別ごとに
+// 存在するフィールドだけを組み立てる（urlはweb_articleにしか無い）。
+function formatSourceInfo(source: KnowledgeExtractionInput["source"]): string {
+  if (source.type === "web_article") {
+    return `タイトル: ${source.title}\nURL: ${source.url}`;
+  }
+  const label = source.type === "text" ? "テキスト入力" : "画像入力";
+  return `入力元: ${source.title ?? label}`;
+}
+
 function buildPrompt(input: KnowledgeExtractionInput, extraInstruction?: string): string {
   const conversation = truncateConversation(input.conversation);
 
   const base = `以下の記事とDeep Dive会話から、ユーザーが新しく理解したと考えられる内容の保存候補を抽出してください。
 
 # 記事情報
-タイトル: ${input.source.title}
-URL: ${input.source.url}
+${formatSourceInfo(input.source)}
 記事の要約: ${input.articleAnalysis.summary}
 
 # 記事の前提知識（参考。これ自体を理解済みとして扱わないこと）
@@ -150,7 +159,8 @@ export function createVertexKnowledgeExtractionService(
       console.log("[KnowledgeExtraction] start", {
         provider: providerName,
         model,
-        url: input.source.url,
+        sourceType: input.source.type,
+        url: input.source.type === "web_article" ? input.source.url : undefined,
         conversationLength: input.conversation.length,
       });
 

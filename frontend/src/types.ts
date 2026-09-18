@@ -1,8 +1,10 @@
-export type DigSource = {
-  type: "web_article";
-  url: string;
-  title: string;
-};
+// URLだけでなく、貼り付けテキスト・画像からも「掘れる」ようにしたための判別可能なユニオン。
+// web_articleは既存の形のまま（urlを持つのはこれだけ）。text/imageにはurlが無く、
+// titleは任意（無ければ「テキスト入力」「画像入力」といったUI側のfallback表示になる）。
+export type DigSource =
+  | { type: "web_article"; url: string; title: string }
+  | { type: "text"; title?: string }
+  | { type: "image"; title?: string };
 
 export type Concept = {
   id: string;

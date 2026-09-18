@@ -95,8 +95,11 @@ flowchart TD
     D -->|pingDatabase| E["db.ts<br/>getMongoClient()"]
     E -->|MongoClient| F[("MongoDB")]
 
-    H -->|parseArticleUrl| I["dig.ts<br/>buildDigResult"]
-    I -->|fetchArticle| J["articleFetcher.ts<br/>リダイレクトをホップごとに追跡"]
+    H -->|resolveInputSource| RS["dig.ts<br/>URL/テキスト/画像を判定"]
+    RS -->|"type: url"| I["dig.ts<br/>buildDigResult"]
+    RS -->|"type: text"| I
+    RS -->|"type: image"| I
+    I -->|"type: urlのみ"| J["articleFetcher.ts<br/>リダイレクトをホップごとに追跡"]
     J -->|各ホップで検証| N["network.ts<br/>assertPublicHost"]
     J -->|各ホップで検証| R["robots.ts<br/>ensureAllowedByRobots"]
     N -.->|SSRF対象なら400| J
@@ -104,12 +107,12 @@ flowchart TD
     J -->|"fetch(url)"| K["対象Webサイト"]
     K -->|HTML| J
     J -->|"JSDOM + Readability<br/>title / textContent"| I
-    I -->|"getArticleAnalysisService()"| AAF["articleAnalysisFactory.ts"]
+    I -->|"getArticleAnalysisService()<br/>title/url/content または image"| AAF["articleAnalysisFactory.ts"]
     AAF -->|"LLM_PROVIDER=mock"| AAM["articleAnalysis.mock.ts"]
-    AAF -->|"LLM_PROVIDER=vertex"| AAV["articleAnalysis.vertex.ts<br/>prompt生成→LlmProvider→JSON parse→schema検証<br/>（失敗時1回だけ再試行）"]
-    AAV -->|"getLlmProvider()"| PF2["llm/provider/llmProviderFactory.ts"]
-    PF2 -->|"generateText(responseJsonSchema付き)"| VP2["vertexGeminiProvider.ts"]
-    VP2 -->|"generateContent()"| VX2[("Vertex AI<br/>Gemini")]
+    AAF -->|"LLM_PROVIDER=vertex"| AAV["articleAnalysis.vertex.ts<br/>プロンプト生成（テキスト用/画像用）→LlmProvider→JSON parse→schema検証<br/>（失敗時1回だけ再試行）"]
+    AAV -->|"getLlmProvider()<br/>imageがあればimages配列も渡す"| PF2["llm/provider/llmProviderFactory.ts"]
+    PF2 -->|"generateText(responseJsonSchema, images?)"| VP2["vertexGeminiProvider.ts"]
+    VP2 -->|"generateContent()<br/>imagesがあればcreateUserContent()でマルチモーダル化"| VX2[("Vertex AI<br/>Gemini")]
     AAM -->|ArticleAnalysis| I
     AAV -->|ArticleAnalysis| I
     I --> H
@@ -149,15 +152,21 @@ flowchart TD
 - **`network.ts`**: `assertPublicHost(url)` がSSRF対策を担当。ホスト名が`localhost`/`*.localhost`、またはIPリテラルでプライベート/ループバック/リンクローカル（`169.254.169.254`等のクラウドメタデータエンドポイントを含む）なら`ArticleFetchError`（`400`）。ホスト名の場合はDNS解決した実IPも同様にチェックし、DNSリバインディングを防ぐ。
 - **`robots.ts`**: `ensureAllowedByRobots(url, userAgent)` がrobots.txtを取得・パースし、Diggerの User-Agent（`digger`）または`*`グループのルールと照合。`Disallow`に一致すれば`ArticleFetchError`（`403`）。robots.txt自体が取得できない（ネットワークエラー・非2xxなど）場合は許可されているものとして扱う。簡易パーサのため`Allow`/`Disallow`のみサポートし、`Crawl-delay`等は無視する。
 - **`errors.ts`**: `ArticleFetchError`（`400`/`403`/`422`/`502`のいずれかのステータスを持つ）。記事取得パイプライン全体（URL検証・SSRF対策・robots確認・HTTP取得・本文抽出）で共通に使うエラー型。
-- **`dig.ts`**: `parseArticleUrl()` がリクエストの `url` を検証（未指定・不正な形式・http/https以外のプロトコルはエラー）。`buildDigResult()` が `fetchArticle()` で取得した実際の `title`/`textContent` を `llm/articleAnalysisFactory.ts` の `getArticleAnalysisService()`（`LLM_PROVIDER`に応じてmock/vertexを切り替え）に渡し、その結果と組み合わせて `DigResult` を返します。`LlmProviderError`は`index.ts`側で捕捉し、`toSafeApiResponse()`で安全なレスポンスに変換します。
+- **`dig.ts`**: Diggerは「URLを入れること」自体を価値にしないため、URL・テキスト貼り付け・画像のいずれからも「掘れる」ようにしている。`resolveInputSource(body)` がリクエストボディ（`{ input?: string; url?: string; image?: { data, mimeType } }`）を共通の`InputSource`（`{type:"url",url} | {type:"text",text} | {type:"image",data,mimeType,caption?}`）へ正規化する。
+  - **URL判定**: `image`が無く`input`（または後方互換の`url`）が空白を含まない文字列で`new URL()`がhttp/https既定で成功する場合だけ`type:"url"`とする。空白を含む文字列は「URLらしき文字列を含む自由なテキスト」の可能性が高いため、一律テキスト扱いにして誤判定を避ける。
+  - **テキスト**: 前後trimし、`MAX_TEXT_INPUT_LENGTH`（50,000文字）を超えたら`DigInputError`（`400`）。それ以下はそのまま`type:"text"`として`ArticleAnalysisInput.content`に渡し、実際のLLMへの文字数制限（12,000文字）は既存の`articleAnalysis.vertex.ts`の`truncateContent()`に委ねる（二重に制限ロジックを持たない）。
+  - **画像**: `data:image/xxx;base64,...`形式（`FileReader.readAsDataURL()`が返す形。prefixは`stripDataUrlPrefix()`で除去）または生base64のどちらでも受け付ける。`mimeType`は`image/jpeg`/`image/png`/`image/webp`のみ許可（`ALLOWED_IMAGE_MIME_TYPES`）、概算バイトサイズが`MAX_IMAGE_BYTES`（8MB）を超えたら`DigInputError`（`413`）。付随するテキスト（Composerの入力欄に書かれた自由文）は`caption`として画像解析の補足コンテキストに使う。
+  - `buildDigResult(input: InputSource)` が入力種別ごとに分岐: `url`は従来通り`fetchArticle()`→`ArticleAnalysisService.analyze({title,url,content})`、`text`は`analyze({content: text})`、`image`は`analyze({image: {data,mimeType}, content: caption})`。いずれも最終的に同じ`DigResult`（`source` + `analysis`）へ収束するため、Deep Dive・Knowledge Extraction・Understanding Mapは入力形式を一切意識しない。`source.type`は`web_article`/`text`/`image`のいずれかになる（[Knowledgeのsource](#knowledgeモデル不変のメモではなく現在の理解状態)参照）。
+  - 画像はMVPでは永続保存しない。Gemini呼び出しが完了したらメモリ上のbase64データは破棄され、DBにもファイルストレージにも残らない（frontend→backend→Gemini→破棄、という一時利用）。将来Knowledgeのsourceとして画像を再表示したくなった場合は、Cloud Storage等へ永続化する余地を`KnowledgeSource`のschema変更（`imageUrl`等の追加）で確保できる設計にしている。
 - **`deepDive.ts`**: `parseDeepDiveInput()` がリクエストボディを `llm/deepDive.ts` の `deepDiveInputSchema` でそのまま検証（`articleAnalysis`/`question`/`conversationHistory`/`userKnowledge?`の形が正しいか）。`buildDeepDiveResponse()`（`createBuildDeepDiveResponse()`のデフォルトエクスポート）は、クライアントが`userKnowledge`を渡さなかった場合に`resolveUserKnowledge`（デフォルトは`defaultResolveUserKnowledge`）を呼んで補い、`llm/deepDiveFactory.ts` の `getDeepDiveService()`（`LLM_PROVIDER`でmock/vertexを切り替え）へ渡します。`resolveUserKnowledge`は`getProvider`と同様の理由（テストで実際のMongoDB接続を発生させないため）で注入可能にしており、`deepDive.test.ts`ではフェイクの関数を渡してテストしています。`defaultResolveUserKnowledge`の実装は`knowledge.ts`の`getKnowledgeForDeepDive()`（status: active/foundationalのみ）→`llm/knowledgeRetrieval.ts`の`hybridKnowledgeRetrievalService`という流れで、取得・選定に失敗しても例外を投げず`undefined`にフォールバックします（Deep Dive自体は従来通り継続）。
 - **`types.ts`**: `/api/dig` のリクエスト型（`DigRequest`）とレスポンス型（`DigResult` / `DigSource`、および `llm/articleAnalysis.ts` の `ArticleAnalysis`）を定義。frontend側の `src/types.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。`/api/deep-dive` は `llm/deepDive.ts` の型をそのままリクエスト/レスポンス型として使うため、`types.ts` に重複定義はありません。
+- **`knowledgeSource.ts`**: `DigSource`/Knowledgeの`source`フィールドの唯一の定義（`knowledgeSourceSchema`、判別可能なユニオン）。以前は`llm/knowledgeExtraction.ts`・`knowledge.ts`（Mongoドキュメントschemaと`SaveKnowledgeInput`の2箇所）・`types.ts`にほぼ同じ`{type:"web_article",url,title}`という形が個別に重複定義されていたが、URL以外の入力（テキスト・画像）に対応するにあたって1箇所へ集約した。`web_article`は既存の形のまま（後方互換）、`text`/`image`は`url`を持たず`title`は任意（無ければfrontend側が「テキスト入力」「画像入力」とfallback表示する）。
 - **`llm/`**: LLMを使う4処理（後述）の型・schema・interface・モック実装、および`llm/provider/`（Vertex AI等のプロバイダー抽象化層。後述）。
 - **`llmTest.ts`**: 開発用の疎通確認API `POST /api/llm/test` のロジック。リクエストの`message`をzodで検証し、`llm/provider/`の`getLlmProvider()`が返す`LlmProvider`（デフォルトはモック）の`generateText()`を、固定のsystem promptと一緒に呼ぶだけです。Diggerの業務ロジック（Article Analysis等）はまだ関与しません。
 - 現時点でルートは8つ:
   - `GET /api/health` — プロセスが生きていることの確認（DBには触れない）
   - `GET /api/health/db` — `pingDatabase()` を呼び、成功なら `200 { status: "ok", db: "connected" }`、失敗なら `503 { status: "error", db: "disconnected", message }`
-  - `POST /api/dig` — `{ url: string }` を受け取り、URLバリデーション失敗またはSSRF対象ホストは `400`、robots.txtにより不許可なら `403`、記事取得・抽出・Article Analysisに成功すれば `200` で `DigResult`、それ以外の取得・抽出失敗は `422`（本文抽出失敗・非HTML）または `502`（アクセス失敗・非2xx・ホスト名解決失敗）で `{ error: string }`
+  - `POST /api/dig` — `{ input?: string; url?: string; image?: { data: string; mimeType: string } }`（`url`は旧クライアントとの後方互換用エイリアス）を受け取り、`resolveInputSource()`がURL/テキスト/画像を自動判定する。入力不正（空・URLとして不正・テキストが長すぎる・画像のmime/サイズ不正）は`DigInputError`により`400`（画像サイズ超過のみ`413`）。URL入力でSSRF対象ホストなら`400`、robots.txtにより不許可なら`403`。取得・解析に成功すれば`200`で`DigResult`（`source.type`は`web_article`/`text`/`image`）、それ以外の取得・抽出失敗は`422`（本文抽出失敗・非HTML、URL入力のみ）または`502`（アクセス失敗・非2xx・ホスト名解決失敗）で`{ error: string }`。ボディサイズは`hono/body-limit`ミドルウェアで15MBまでに制限（base64化した画像を想定した上限）。
   - `POST /api/deep-dive` — `{ articleAnalysis, question, conversationHistory, userKnowledge? }` を受け取り、schemaバリデーション失敗は `400`、成功すれば `200` で `DeepDiveResponse`（`answer`/`relatedConcepts: { name, relation }[]`/`suggestedFollowUps`）、LLMプロバイダー側のエラーは原因に応じて `500`/`502`/`504`、それ以外の失敗は `502` で `{ error: string }`。**`userKnowledge`をクライアントが渡さない場合、サーバー側で保存済みKnowledge（`status: active`/`foundational`のみ）から今回の質問・記事に関連しそうなものだけを自動的に選んでLLMへ渡す**（詳細は[Relevant Knowledge Retrieval](#relevant-knowledge-retrievalとknowledgeの再利用)を参照）
   - `POST /api/knowledge/extract` — `{ source, articleAnalysis, conversationHistory }` を受け取り、schemaバリデーション失敗は `400`。保存済みKnowledge（あれば）を`existingKnowledge`としてLLMへ渡した上でKnowledge Extractionを実行し、`200` で `{ candidates: KnowledgeCandidate[] }`（`confidence: "low"`の候補はUXをシンプルに保つため事前に除外）。LLMプロバイダー側のエラーは原因に応じて`500`/`502`/`504`、それ以外の失敗は`502`で`{ error: string }`
   - `POST /api/knowledge/save` — `{ source, candidates: KnowledgeCandidate[] }`（ユーザーがチェックボックスで選んだ候補のみ）を受け取り、schemaバリデーション失敗は`400`。既存Knowledgeと（concept完全一致 + statement正規化後一致で）重複するものは保存せずスキップし、`200`で`{ savedCount: number, skippedCount: number }`、それ以外の失敗は`502`で`{ error: string }`
@@ -225,8 +234,9 @@ flowchart LR
 
 `LLM_PROVIDER=vertex`のとき、`articleAnalysisFactory.ts`が`vertexArticleAnalysisService`を選択します。処理の流れ:
 
-1. **入力サイズの制御**: 記事本文（`content`）が`MAX_CONTENT_LENGTH`（12,000文字）を超える場合は切り詰め、末尾に省略した旨を追記します。トークン数ではなく文字数での単純な制御です（Gemini 2.5 Flash等のコンテキストウィンドウ自体は十分大きいですが、コスト・レイテンシを抑えるための保守的な上限です）。
-2. **prompt生成**: システムプロンプトでDiggerのArticle Analysisエンジンとしての役割（何が起きたか／なぜ重要か／前提知識／関連テーマ／深掘りの問いを整理する。単なる要約ではない）を指示し、ユーザープロンプトで記事のtitle/url/本文と、各フィールド（`summary`/`whyItMatters`/`concepts`/`entities`/`connections`/`deepDiveQuestions`）ごとの具体的な出力ルール（良い例/悪い例を含む）を渡します。**frontendのProgressive Disclosure UI（詳細は[`frontend/README.md`](../frontend/README.md)）に合わせ、`summary`/`whyItMatters`は最大3文、`concept.description`は1〜2文、`deepDiveQuestions`は最大4件（最初の1件が最も優先度の高い問いになるよう指示）に絞るようpromptで制約しています。schema自体（フィールド構成）は変更していません**。frontend側でも`firstSentences()`（文末記号での単純な冒頭N文抽出）により、想定より長い応答が来た場合の安全弁として表示文字数を制御しています。
+1. **入力サイズの制御**: 記事本文・貼り付けテキスト（`content`）が`MAX_CONTENT_LENGTH`（12,000文字）を超える場合は切り詰め、末尾に省略した旨を追記します。トークン数ではなく文字数での単純な制御です（Gemini 2.5 Flash等のコンテキストウィンドウ自体は十分大きいですが、コスト・レイテンシを抑えるための保守的な上限です）。
+2. **prompt生成（入力形式で分岐）**: `input.image`の有無で`buildTextPrompt()`（URL記事・貼り付けテキスト共通。urlが無ければその行を省く）と`buildImagePrompt()`（画像専用）を使い分けます。出力ルール（`summary`/`whyItMatters`/`concepts`/`entities`/`connections`/`deepDiveQuestions`の各フィールドのルール）は`OUTPUT_RULES`として1箇所にまとめ、両方のprompt builderが共有しています。**frontendのProgressive Disclosure UI（詳細は[`frontend/README.md`](../frontend/README.md)）に合わせ、`summary`/`whyItMatters`は最大3文、`concept.description`は1〜2文、`deepDiveQuestions`は最大4件（最初の1件が最も優先度の高い問いになるよう指示）に絞るようpromptで制約しています。schema自体（フィールド構成）は入力形式に関わらず共通で、変更していません**。frontend側でも`firstSentences()`（文末記号での単純な冒頭N文抽出）により、想定より長い応答が来た場合の安全弁として表示文字数を制御しています。
+   - `buildImagePrompt()`は、画像がグラフ・SNSスクリーンショット・新聞紙面・写真中の文章など何であるかをまず判断させ、種類に応じた読み取り方（グラフなら軸・傾向・変化・重要なポイント、SNSなら投稿内容・文脈・主張、新聞なら見出し・本文・図表）を指示します。単純なOCR（文字起こし）だけでなく画像そのものの意味を理解させることが狙いで、専用のOCRパイプラインは別途作っていません（Geminiのマルチモーダル理解にそのまま委ねる）。「画像から読み取れない内容を推測で事実として扱わない」ことも明記しています。Composerで画像に添えたテキスト（`caption`）があれば「ユーザーからの補足」としてpromptに追加します。
 3. **structured output**: `articleAnalysisSchema`を[Zod 4の`z.toJSONSchema()`](https://zod.dev/json-schema)（追加ライブラリ不要）でJSON Schemaに変換し、`LlmProvider.generateText()`の`responseJsonSchema`として渡します。`vertexGeminiProvider.ts`はこれを`responseMimeType: "application/json"` + `responseJsonSchema`として`@google/genai`の`generateContent()`に渡し、Geminiのnative構造化出力機能でJSON形式の出力を強制します。
 4. **runtime validation**: 返ってきたテキストを`JSON.parse()`し（万一markdownのコードフェンスで囲まれていても対応）、`articleAnalysisSchema.safeParse()`で検証します。**LLMが返した値は無条件に信用しません。**
 5. **再試行**: JSON parse失敗・schema validation失敗（必須フィールド欠落・不正なenum値・空レスポンス等）の場合、「前回の出力がschemaに適合しなかったため、指定schemaに厳密に従って再生成してください」という指示を追加して**1回だけ**再試行します。それでも失敗すれば`LlmProviderError`（`empty_response`）を投げ、`index.ts`が`502`として返します。複雑な自動修復は行いません。
@@ -323,11 +333,18 @@ Article Analysis等の各LLM処理が「どのAIベンダーを使うか」を�
 
 ```ts
 // llm/provider/llmProvider.ts
+export type GenerateTextImageInput = {
+  data: string; // base64エンコードされた画像データ（data URLのprefixは含まない）
+  mimeType: string;
+};
+
 export type GenerateTextInput = {
   systemPrompt?: string;
   prompt: string;
   // 構造化出力(JSON)を要求する場合の標準JSON Schema。対応していないproviderは無視してよい。
   responseJsonSchema?: Record<string, unknown>;
+  // マルチモーダル入力（画像）。対応していないprovider（MockLlmProvider等）は無視してよい。
+  images?: GenerateTextImageInput[];
 };
 
 export interface LlmProvider {
@@ -335,9 +352,9 @@ export interface LlmProvider {
 }
 ```
 
-- **`llmProvider.ts`**: 上記の`LlmProvider` interfaceのみを定義。`ArticleAnalysisService`等の既存interfaceとは別レイヤー（既存interfaceは「記事を解析して構造化データを返す」というDigger固有の処理、`LlmProvider`は「テキストを1回生成する」という汎用的な処理）なので、新設しても既存interfaceの乱立にはあたりません。
-- **`mockLlmProvider.ts`**: `MockLlmProvider`。受け取った`prompt`を埋め込んだ固定文言を返すだけで、外部通信は一切行いません。
-- **`vertexGeminiProvider.ts`**: `VertexGeminiProvider`。[`@google/genai`](https://www.npmjs.com/package/@google/genai)（Googleの統一Gen AI SDK。Vertex AIとGemini Developer APIの両方に対応し、旧来の`@google-cloud/vertexai`はGemini 2.0以降の新機能を受け取らないため今回は不採用）を使い、`GCP_PROJECT_ID`/`GCP_LOCATION`/`GEMINI_MODEL`（すべて環境変数、コードにモデル名はハードコードしない）でVertex AI上のGeminiを呼び出します。認証は明示的なAPIキーではなくApplication Default Credentials（ADC）任せにしています（後述）。タイムアウトは`AbortController`で30秒に設定（`REQUEST_TIMEOUT_MS`）。
+- **`llmProvider.ts`**: 上記の`LlmProvider` interfaceのみを定義。`ArticleAnalysisService`等の既存interfaceとは別レイヤー（既存interfaceは「記事を解析して構造化データを返す」というDigger固有の処理、`LlmProvider`は「テキストを1回生成する」という汎用的な処理）なので、新設しても既存interfaceの乱立にはあたりません。`images`は画像入力（Understanding Mapの入力方式拡張）に対応するために追加したフィールドで、「base64画像1枚」だけを表現する最小限の形にとどめています（将来pdf/audio/video等を追加する場合はこの型を判別可能なユニオンへ拡張する余地があります）。
+- **`mockLlmProvider.ts`**: `MockLlmProvider`。受け取った`prompt`を埋め込んだ固定文言を返すだけで、外部通信は一切行いません。`images`は無視します（interfaceのコメント通り、対応しないproviderの標準的な振る舞い）。
+- **`vertexGeminiProvider.ts`**: `VertexGeminiProvider`。[`@google/genai`](https://www.npmjs.com/package/@google/genai)（Googleの統一Gen AI SDK。Vertex AIとGemini Developer APIの両方に対応し、旧来の`@google-cloud/vertexai`はGemini 2.0以降の新機能を受け取らないため今回は不採用）を使い、`GCP_PROJECT_ID`/`GCP_LOCATION`/`GEMINI_MODEL`（すべて環境変数、コードにモデル名はハードコードしない）でVertex AI上のGeminiを呼び出します。認証は明示的なAPIキーではなくApplication Default Credentials（ADC）任せにしています（後述）。タイムアウトは`AbortController`で30秒に設定（`REQUEST_TIMEOUT_MS`）。`images`が指定された場合は、SDKが提供する`createUserContent()`/`createPartFromBase64()`（`@google/genai`固有の型・関数はこのファイルに閉じ込め、他レイヤーには一切漏らさない）でプロンプト文字列と画像パートをまとめたマルチモーダルコンテンツを組み立てて`generateContent()`に渡します。`images`が無ければ従来通りプロンプト文字列をそのまま渡すため、既存の呼び出し（Deep Dive・Knowledge Extraction等）の挙動は変わりません。
   - `responseJsonSchema`が渡された場合は`responseMimeType: "application/json"`と合わせて`generateContent()`のconfigに設定し、Geminiのnative構造化出力機能を使う。未指定の場合は通常のテキスト応答（`/api/llm/test`はこちらの経路）。
   - レスポンスの`usageMetadata`（`promptTokenCount`/`candidatesTokenCount`/`totalTokenCount`）を`console.log`でそのまま出力するだけの軽量なトークン使用量ロギングを行う（本文全文やcredentialは出力しない）。
   - `classifyVertexError()`という純粋関数でエラーを分類しています（ネットワークを使わないので単体テスト可能）: `AbortError`→`timeout`、HTTP `401`/`403`→`auth_failed`、HTTP `404`→`invalid_model`、ADC関連のエラーメッセージ→`auth_failed`、それ以外→`api_error`。呼び出し自体は成功したがテキストが空の場合は`empty_response`。
@@ -503,6 +520,7 @@ curl -X POST http://localhost:8787/api/llm/test \
 
 ## 今後の拡張ポイント（未実装）
 
+- **入力方式のさらなる拡張（pdf/audio/video）**: `InputSource`（`dig.ts`）と`GenerateTextInput.images`（`llm/provider/llmProvider.ts`）はどちらも判別可能なユニオン/専用フィールドとして設計してあるため、`InputSource`に`{type:"pdf",...}`等を追加し、`GenerateTextInput`に`documents`/`audio`等の新フィールドを足せば既存のurl/text/imageの扱いを壊さずに拡張できる。Gemini自体はPDF・音声・動画の入力にも対応しているため、`vertexGeminiProvider.ts`の`generateContent()`呼び出しに新しいpartの種類を足すだけで済む見込み（`createPartFromBase64`は画像に限らずmimeTypeに応じた汎用的なpart生成に使える）。ただし音声・動画は画像よりファイルサイズが大きくなりやすいため、`MAX_IMAGE_BYTES`相当の上限値やbody-limitの見直しが必要になる。
 - `POST /api/llm/test`は開発用の疎通確認APIのため、他の処理の実LLM化が進んだら削除を検討する
 - Deep Diveの会話履歴を要約してからpromptに含める（現状は直近`MAX_HISTORY_MESSAGES`（20件）を単純に切り詰めるだけで、それ以前の文脈は完全に失われる）
 - 記事本文の切り詰め（`MAX_CONTENT_LENGTH`、現状12,000文字の単純な文字数カット）を、文の区切りを考慮した切り詰めや要約前処理に改善する

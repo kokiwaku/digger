@@ -1,8 +1,9 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { pingDatabase } from "./db.js";
-import { buildDigResult, parseArticleUrl } from "./dig.js";
+import { buildDigResult, resolveInputSource, DigInputError } from "./dig.js";
 import { ArticleFetchError } from "./articleFetcher.js";
 import { buildDeepDiveResponse, parseDeepDiveInput } from "./deepDive.js";
 import { callLlmTest, parseLlmTestInput } from "./llmTest.js";
@@ -16,10 +17,13 @@ import {
   refreshAndFetchUnderstandingMap,
 } from "./knowledgeApi.js";
 import { LlmProviderError, toSafeApiResponse } from "./llm/provider/llmProviderError.js";
-import type { DigRequest } from "./types.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:5173";
+// 画像はbase64化するとバイナリの約4/3のサイズになる（MAX_IMAGE_BYTES=8MB相当で約10.9MB）。
+// JSONの構造分・余裕を見て15MBを/api/digのボディ上限にする（他のAPIはテキストのみで
+// 十分小さいため、この上限は/api/digにだけ適用する）。
+const DIG_BODY_LIMIT_BYTES = 15 * 1024 * 1024;
 
 const app = new Hono();
 
@@ -39,37 +43,48 @@ app.get("/api/health/db", async (c) => {
   }
 });
 
-app.post("/api/dig", async (c) => {
-  const body = await c.req.json<Partial<DigRequest>>().catch(() => null);
+app.post(
+  "/api/dig",
+  bodyLimit({
+    maxSize: DIG_BODY_LIMIT_BYTES,
+    onError: (c) => c.json({ error: "リクエストサイズが大きすぎます" }, 413),
+  }),
+  async (c) => {
+    const body = await c.req.json().catch(() => null);
 
-  let url: URL;
-  try {
-    url = parseArticleUrl(body?.url);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "invalid request";
-    return c.json({ error: message }, 400);
-  }
+    let inputSource;
+    try {
+      inputSource = resolveInputSource(body);
+    } catch (err) {
+      if (err instanceof DigInputError) return c.json({ error: err.message }, err.status);
+      const message = err instanceof Error ? err.message : "invalid request";
+      return c.json({ error: message }, 400);
+    }
 
-  try {
-    const result = await buildDigResult(url);
-    return c.json(result);
-  } catch (err) {
-    if (err instanceof ArticleFetchError) {
-      return c.json({ error: err.message }, err.status);
+    try {
+      const result = await buildDigResult(inputSource);
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof ArticleFetchError) {
+        return c.json({ error: err.message }, err.status);
+      }
+      if (err instanceof DigInputError) {
+        return c.json({ error: err.message }, err.status);
+      }
+      if (err instanceof LlmProviderError) {
+        console.error("[api/dig] Article Analysis provider error", {
+          code: err.code,
+          message: err.message,
+          cause: err.cause,
+        });
+        const { status, message: safeMessage } = toSafeApiResponse(err);
+        return c.json({ error: safeMessage }, status);
+      }
+      const message = err instanceof Error ? err.message : "解析に失敗しました";
+      return c.json({ error: message }, 502);
     }
-    if (err instanceof LlmProviderError) {
-      console.error("[api/dig] Article Analysis provider error", {
-        code: err.code,
-        message: err.message,
-        cause: err.cause,
-      });
-      const { status, message: safeMessage } = toSafeApiResponse(err);
-      return c.json({ error: safeMessage }, status);
-    }
-    const message = err instanceof Error ? err.message : "記事の解析に失敗しました";
-    return c.json({ error: message }, 502);
-  }
-});
+  },
+);
 
 app.post("/api/deep-dive", async (c) => {
   const body = await c.req.json().catch(() => null);

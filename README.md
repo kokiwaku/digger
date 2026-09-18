@@ -46,23 +46,27 @@ flowchart LR
 
 ## 「掘る」機能（MVP）
 
-トップ画面のURL入力欄に記事URLを入力して「掘る」を押すと、`POST /api/dig` が呼ばれ、解析結果（タイトル・要約・なぜ重要か・前提知識・関連トピック・深掘りの問い）が画面に表示されます。
+Diggerの本質は「記事を読むこと」ではなく「気になったものを掘り、理解し、理解を蓄積すること」なので、入力方式はURLに限定していません。トップ画面のComposer（1つの入力欄＋画像添付ボタン）にURL・貼り付けテキスト・画像のいずれかを入れて「掘る」を押すと、`POST /api/dig` が呼ばれ、解析結果（タイトル・要約・なぜ重要か・前提知識・関連トピック・深掘りの問い）が画面に表示されます。URLかテキストかはユーザーに選ばせず、backendが自動判定します。
 
-バックエンドは入力されたURLに実際にアクセスしてHTMLを取得し、[Mozilla Readability](https://github.com/mozilla/readability)（Firefoxのリーダービューと同じ抽出エンジン）でnav/footer/広告などを除いた本文と`title`を抽出します。ニュースサイト専用のパースは行わず、一般的なWeb記事を対象にした構造です。
+- **URL**: 実際にアクセスしてHTMLを取得し、[Mozilla Readability](https://github.com/mozilla/readability)（Firefoxのリーダービューと同じ抽出エンジン）でnav/footer/広告などを除いた本文と`title`を抽出します。ニュースサイト専用のパースは行わず、一般的なWeb記事を対象にした構造です（従来と同じ）。
+- **テキスト**: 記事本文の引用・ニュースの一節・メモ・SNS投稿のコピペなど、貼り付けた自由なテキストをそのまま解析に渡します。外部への`fetch`は行いません。
+- **画像**: スクリーンショット・新聞紙面・グラフや図表・写真中の文章などをアップロードすると、Google Cloud Vertex AI Geminiのマルチモーダル入力でそのまま解析します。OCRで文字起こしするだけでなく、画像の意味（グラフの傾向、SNS投稿の文脈、紙面の見出し等）まで理解しようとします。専用のOCRパイプラインは実装していません。
 
-抽出した本文は「Article Analysis」というLLM処理（[`backend/README.md`](backend/README.md#llm処理article-analysis--personalized-analysis--knowledge-extraction--deep-dive)を参照）に渡され、要約・重要性・前提知識・関連人物や組織・関連トピック・深掘りの問いを生成します。環境変数`LLM_PROVIDER`で切り替え可能で、`mock`（デフォルト）なら固定のデモデータ（日銀の利上げに関するサンプル）、`vertex`ならGoogle Cloud Vertex AI Geminiが実際の記事内容を解析した結果を返します。
+いずれの入力も、最終的には同じ「Article Analysis」というLLM処理（[`backend/README.md`](backend/README.md#llm処理article-analysis--personalized-analysis--knowledge-extraction--deep-dive)を参照）に渡され、要約・重要性・前提知識・関連人物や組織・関連トピック・深掘りの問いを生成します。環境変数`LLM_PROVIDER`で切り替え可能で、`mock`（デフォルト）なら固定のデモデータ（日銀の利上げに関するサンプル）、`vertex`ならGoogle Cloud Vertex AI Geminiが実際の入力内容を解析した結果を返します。
 
 ```
 POST /api/dig
 Content-Type: application/json
 
-{ "url": "https://example.com/article" }
+{ "input": "https://example.com/article" }
 ```
 
-- URLが未指定・不正な形式・`http`/`https`以外のプロトコル・アクセスが許可されていないホスト（下記SSRF対策を参照）の場合は `400 { "error": "..." }` を返します。
-- robots.txtにより取得が許可されていない場合は `403 { "error": "..." }` を返します。
-- 記事取得・抽出に失敗した場合は `422`（本文抽出失敗・HTML以外のコンテンツ）または `502`（アクセス失敗・非2xxレスポンス・ホスト名解決失敗）で `{ "error": "..." }` を返します。詳細は [`backend/README.md`](backend/README.md) を参照してください。
-- 成功時は以下の形のJSONを返します（`source.title`は実際に取得した値、`analysis`以下は現時点ではモックのサンプルデータ）。
+貼り付けテキストの場合は`input`に自由なテキストを、画像の場合は`image: { "data": "（base64）", "mimeType": "image/png" }`を渡します（`input`は画像に添える補足コメントとして任意で併用可能）。
+
+- 入力が未指定・空・URLとして不正な形式・`http`/`https`以外のプロトコル・アクセスが許可されていないホスト（下記SSRF対策を参照）・テキストが長すぎる・画像が対応形式外の場合は `400 { "error": "..." }` を、画像サイズが大きすぎる場合は `413 { "error": "..." }` を返します。
+- robots.txtにより取得が許可されていない場合は `403 { "error": "..." }` を返します（URL入力のみ）。
+- 記事取得・抽出に失敗した場合は `422`（本文抽出失敗・HTML以外のコンテンツ、URL入力のみ）または `502`（アクセス失敗・非2xxレスポンス・ホスト名解決失敗）で `{ "error": "..." }` を返します。詳細は [`backend/README.md`](backend/README.md) を参照してください。
+- 成功時は以下の形のJSONを返します（`source.title`は実際に取得した値、`analysis`以下は現時点ではモックのサンプルデータ）。テキスト・画像入力の場合、`source`は`{ "type": "text" }`/`{ "type": "image" }`となり`url`は含まれません。
 
 ```json
 {
@@ -86,7 +90,7 @@ Content-Type: application/json
 
 記事本文そのものはレスポンスに含めていません（フロントエンドへ大量のテキストを返さないため）。前提知識（`concepts`）は表示のみです。`deepDiveQuestions`（AIが提示する次の質問候補）はデータとしては返しますが、**Diggerの「ユーザー自身の疑問を起点に掘る」という方針により、frontendのUIには一切表示していません**。深掘りは常に下記の自由入力欄から行います。
 
-画面はこの解析結果を並べた「情報カード中心」のUIではなく、**会話中心**のUIです。記事を掘った直後に見えるのは、短い地の文の要約（`summary`の冒頭3文）と「この記事について、何が気になりますか？」という大きめの自由入力欄（テキストエリア、Enterで送信・Shift+Enterで改行）のみです。`concepts`・`whyItMatters`・`connections`・`entities`はカードとして並べず、「前提知識を見る」「この記事の背景」という控えめなリンクからのみ、ユーザーが望んだ場合に表示されます。ユーザーが最初の質問を送ると画面はほぼ会話のみの表示に切り替わり、記事情報は退いて会話に集中できるようにしています（詳細は[`frontend/README.md`](frontend/README.md)を参照）。
+画面はこの解析結果を並べた「情報カード中心」のUIではなく、**会話中心**のUIです。掘った直後に見えるのは、短い地の文の要約（`summary`の冒頭3文）と「気になることを聞いてみましょう」という大きめの自由入力欄（テキストエリア、Enterで送信・Shift+Enterで改行）のみです。`concepts`・`whyItMatters`・`connections`・`entities`はカードとして並べず、「前提知識を見る」「背景を見る」という控えめなリンクからのみ、ユーザーが望んだ場合に表示されます。ユーザーが最初の質問を送ると画面はほぼ会話のみの表示に切り替わり、入力元の情報は退いて会話に集中できるようにしています（詳細は[`frontend/README.md`](frontend/README.md)を参照）。
 
 ## 深掘り対話機能
 
@@ -171,13 +175,13 @@ docker compose up --build
 - バックエンドAPI: http://localhost:8787
   - `GET /api/health` — React → Hono の疎通確認
   - `GET /api/health/db` — Hono → MongoDB の接続確認
-  - `POST /api/dig` — URLを受け取り、記事解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
+  - `POST /api/dig` — URL・貼り付けテキスト・画像のいずれかを受け取り、解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
   - `POST /api/deep-dive` — 解析結果と質問を受け取り、深掘りの回答を返す（[深掘り対話機能](#深掘り対話機能)を参照）
   - `POST /api/knowledge/extract` / `POST /api/knowledge/save` / `GET /api/knowledge` — 深掘り会話から理解の候補を抽出し、ユーザーが選んだものだけをMongoDBへ保存する（[理解の蓄積（Knowledge Extraction）](#理解の蓄積knowledge-extraction)を参照）。`GET /api/knowledge`は[自分の理解ページ](#自分の理解ページ)からも利用され、未分類のKnowledgeへのトピック付与もこの呼び出しの中で行われます
   - `POST /api/llm/test` — 開発用のLLM疎通確認API。詳細は [`backend/README.md`](backend/README.md#vertex-ai-gemini-のセットアップ) を参照
 - MongoDB: `mongodb://localhost:27017`（ホストからも接続可能）
 
-フロントエンドの画面 (http://localhost:5173) を開くと、URL入力欄と「掘る」ボタンが表示されます。記事URLを入力して「掘る」を押すと解析結果が表示され、その下から自由入力や質問候補のクリックで深掘りができます。
+フロントエンドの画面 (http://localhost:5173) を開くと、Composer（入力欄＋画像添付ボタン）と「掘る」ボタンが表示されます。URL・テキスト・画像のいずれかを入れて「掘る」を押すと解析結果が表示され、その下の自由入力欄から深掘りができます。
 
 停止する場合:
 
