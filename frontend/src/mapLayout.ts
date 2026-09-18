@@ -1,11 +1,12 @@
 // Understanding Mapのノード配置ロジック（Reactに依存しない純粋なモジュール）。
 //
-// Mapの役割は「すべてを一覧させること」ではなく「気になるConceptから、理解のつながりを
-// 辿ること」に絞っている。そのためTopicはグラフ上のnode（hub node）としては扱わず、
-// 同じクラスタのConcept群をまとめる背景ラベル（表示専用・非physicsな存在）としてのみ扱う。
-// force simulationの対象はConcept nodeだけで、Topic階層のedge（親子・所属）も張らない
-// （「近い」ことは色分け＋弱いクラスタリング力だけで表現し、線を増やしすぎない）。
-import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
+// Mapは「Conceptをランダムに散らしてつなぐもの」ではなく「ユーザーの現在の理解構造
+// （Topic hierarchy）を視覚化したもの」として設計する。そのためforce-directed layout
+// （d3-force）はやめ、Root Topic → Subtopic → Concept → Knowledgeという階層を
+// そのまま木構造レイアウト（dagre）で描画する。ConceptRelationは階層を補足する
+// 横断的なつながりとして別途重ねるだけで、レイアウト自体はTopic hierarchyだけで
+// 常に成立する（relationが0件でも意味のあるMapになる）。
+import dagre from "dagre";
 
 export interface TopicLike {
   _id: string;
@@ -14,7 +15,7 @@ export interface TopicLike {
 
 export const UNCLASSIFIED_CLUSTER = "__unclassified__";
 
-// topicIdの親を辿ってルートTopicのidを返す（マップのクラスタ分けに使う）。
+// topicIdの親を辿ってルートTopicのidを返す（色分け・「すべて」表示時のtree単位に使う）。
 export function findRootTopicId(topics: TopicLike[], topicId: string): string {
   const byId = new Map(topics.map((t) => [t._id, t]));
   let current = byId.get(topicId);
@@ -33,10 +34,8 @@ export interface ConceptLike {
   topicIds: string[];
 }
 
-// クラスタ分け（画面上でどのTopicファミリーに属するか）の基準は、Conceptの最初の
-// topicIdが属するルートTopic。topicIdsが空（未分類）のConceptは専用の「未分類」
-// クラスタに入れる。Topicの階層（親子）はクラスタ分けにしか使わず、Map上に
-// 個別の階層構造としては描画しない（ルートTopicひとつにつき、ラベルはひとつだけ）。
+// 色分け・ツリー単位分けの基準は、Conceptの最初のtopicIdが属するルートTopic。
+// topicIdsが空（未分類）のConceptは専用の「未分類」ツリーに入れる。
 export function getClusterKey(concept: ConceptLike, topics: TopicLike[]): string {
   const primaryTopicId = concept.topicIds[0];
   if (!primaryTopicId) return UNCLASSIFIED_CLUSTER;
@@ -45,162 +44,89 @@ export function getClusterKey(concept: ConceptLike, topics: TopicLike[]): string
 
 export type Point = { x: number; y: number };
 
-// クラスタの中心点を外周円上に配置する。d3-forceの「引き寄せ先」として使うだけで、
-// 最終座標そのものではない（各クラスタ内部の配置はforceLink/forceManyBody/forceCollideが決める）。
-export function computeClusterCenters(clusterKeys: string[]): Map<string, Point> {
-  const clusterCount = Math.max(clusterKeys.length, 1);
-  // クラスタ間の距離を広げすぎると「1つの理解マップ」ではなく孤立した島の集まりに
-  // 見えてしまう。node同士の重なりはforceCollideが防ぐため、ここでの半径は控えめにとどめる。
-  const radius = Math.max(120, clusterCount * 55);
-  const angleStep = (2 * Math.PI) / clusterCount;
+// Node sizeは「理解構造上の階層」を第一基準にする（relation数・Knowledge数を主基準にしない）。
+// 階層が一目で分かるよう、Root Topic > Subtopic > Concept > Knowledgeの差を明確に付ける。
+export const ROOT_TOPIC_BASE_SIZE = 60;
+export const SUBTOPIC_BASE_SIZE = 48;
+export const CONCEPT_BASE_SIZE = 38;
+export const KNOWLEDGE_NODE_WIDTH = 132;
+export const KNOWLEDGE_NODE_HEIGHT = 30;
 
-  const centers = new Map<string, Point>();
-  clusterKeys.forEach((key, index) => {
-    const angle = index * angleStep;
-    centers.set(key, {
-      x: radius + radius * Math.cos(angle),
-      y: radius + radius * Math.sin(angle),
-    });
-  });
-  return centers;
+// 同階層内の補助差（あくまで基本サイズへの小さな上乗せにとどめる。主基準は階層そのもの）。
+export function computeRootTopicSize(childCount: number): number {
+  return ROOT_TOPIC_BASE_SIZE + Math.min(8, childCount * 1.2);
 }
 
-// Node sizeは「なぜこのNodeが大きいのか」が直感的に分かるよう、Conceptに紐づく
-// Knowledge数だけで決める（relation数は使わない。relationが多い＝理解が深いとは限らないため）。
-// サイズ差も極端にならないよう3段階・6px刻みに抑える。
-export function computeConceptRadius(knowledgeCount: number): number {
-  if (knowledgeCount <= 1) return 18; // 36px
-  if (knowledgeCount <= 3) return 21; // 42px
-  return 24; // 48px
+export function computeSubtopicSize(childCount: number): number {
+  return SUBTOPIC_BASE_SIZE + Math.min(6, childCount * 1);
 }
 
-export interface ForceNodeInput {
+export function computeConceptSize(knowledgeCount: number): number {
+  return CONCEPT_BASE_SIZE + Math.min(6, knowledgeCount * 1.5);
+}
+
+export type MapNodeKind = "rootTopic" | "subtopic" | "concept" | "knowledge";
+
+export interface HierarchyNodeInput {
   id: string;
-  clusterKey: string;
-  radius: number;
+  kind: MapNodeKind;
+  width: number;
+  height: number;
 }
 
-export interface ForceLinkInput {
+export interface HierarchyEdgeInput {
+  id: string;
   source: string;
   target: string;
 }
 
-interface SimNode extends ForceNodeInput {
-  x: number;
-  y: number;
-  vx?: number;
-  vy?: number;
-}
-
-const SIMULATION_TICKS = 300;
-
-// ConceptRelationのedge（force layout上ではこれだけがlink force）。「近すぎてどれが
-// 繋がっているか分からない」ことを避けつつ、関連するConcept同士が自然に近づく程度の距離・強さ。
-const RELATION_LINK_DISTANCE = 120;
-const RELATION_LINK_STRENGTH = 0.32;
-
-// previousPositions（フィルタ変更前・ドラッグ後の位置）が渡された場合はwarm startとして使う。
-// 新規ノードはクラスタ中心付近にランダムな初期位置を与える。
-export function computeForceLayout(
-  nodes: ForceNodeInput[],
-  links: ForceLinkInput[],
-  clusterCenters: Map<string, Point>,
-  previousPositions?: Map<string, Point>,
+// 階層構造（Topic→Topic、Topic→Concept、Concept→Knowledge）だけをdagreに渡してレイアウトする。
+// ConceptRelation（横断的なつながり）はレイアウトには使わず、位置が決まった後に見た目だけの
+// 補助edgeとして重ねる（レイアウトを乱さないようにするため）。
+// 複数のルートTopicがある場合、dagreは非連結なグラフとしてまとめて配置する
+// （「すべて」表示時に複数の木が横に並ぶ）。
+export function computeHierarchyLayout(
+  nodes: HierarchyNodeInput[],
+  edges: HierarchyEdgeInput[],
+  direction: "LR" | "TB" = "LR",
 ): Map<string, Point> {
-  if (nodes.length === 0) return new Map();
+  const positions = new Map<string, Point>();
+  if (nodes.length === 0) return positions;
 
-  if (nodes.length === 1) {
-    return new Map([[nodes[0].id, { x: 0, y: 0 }]]);
-  }
-
-  if (nodes.length === 2) {
-    return new Map([
-      [nodes[0].id, { x: -90, y: 0 }],
-      [nodes[1].id, { x: 90, y: 0 }],
-    ]);
-  }
-
-  const simNodes: SimNode[] = nodes.map((n) => {
-    const previous = previousPositions?.get(n.id);
-    const center = clusterCenters.get(n.clusterKey) ?? { x: 0, y: 0 };
-    const seed = previous ?? {
-      x: center.x + (Math.random() - 0.5) * 40,
-      y: center.y + (Math.random() - 0.5) * 40,
-    };
-    return { ...n, x: seed.x, y: seed.y };
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({
+    rankdir: direction,
+    // ranksep: 階層間（Root Topic→Subtopic→Concept→Knowledge）の間隔。
+    // nodesep: 同じ階層内でのnode間の間隔。木同士が混ざらない程度の余白は欲しいが、
+    // 離れすぎて「複数の島」に見えないよう、控えめな値にとどめる。
+    ranksep: 70,
+    nodesep: 20,
+    marginx: 20,
+    marginy: 20,
   });
 
-  const nodeIds = new Set(simNodes.map((n) => n.id));
-  const validLinks = links.filter((l) => nodeIds.has(l.source) && nodeIds.has(l.target));
-
-  const simulation = forceSimulation(simNodes)
-    .force(
-      "link",
-      forceLink<SimNode, ForceLinkInput>(validLinks)
-        .id((d) => d.id)
-        .distance(RELATION_LINK_DISTANCE)
-        .strength(RELATION_LINK_STRENGTH),
-    )
-    // 反発はnode同士の重なり防止に必要な最小限にとどめる（強すぎるとクラスタが
-    // 孤立した島のように離れてしまう）。重なり防止自体はforceCollideが担う。
-    .force("charge", forceManyBody().strength(-150))
-    .force(
-      "collide",
-      forceCollide<SimNode>().radius((d) => d.radius + 10),
-    )
-    .force(
-      "clusterX",
-      forceX<SimNode>((d) => clusterCenters.get(d.clusterKey)?.x ?? 0).strength(0.08),
-    )
-    .force(
-      "clusterY",
-      forceY<SimNode>((d) => clusterCenters.get(d.clusterKey)?.y ?? 0).strength(0.08),
-    )
-    // 全体を中心へ寄せる力を強めにし、クラスタ同士が完全に分断されず
-    // 「1つのマップ」として見え、かつ全体がコンパクトにまとまるようにする。
-    .force("center", forceCenter(0, 0).strength(0.06))
-    .stop();
-
-  for (let i = 0; i < SIMULATION_TICKS; i++) {
-    simulation.tick();
+  for (const node of nodes) {
+    g.setNode(node.id, { width: node.width, height: node.height });
+  }
+  for (const edge of edges) {
+    g.setEdge(edge.source, edge.target);
   }
 
-  return new Map(simNodes.map((n) => [n.id, { x: n.x, y: n.y }]));
-}
+  dagre.layout(g);
 
-export interface ClusterMember {
-  id: string;
-  clusterKey: string;
-  radius: number;
-}
-
-// Topicは「重いボックス」ではなく、クラスタの上に浮かべる控えめなラベルとして表現する。
-// 実際のConcept配置（force layout後の座標）からクラスタの外接矩形を求め、その上端中央を
-// ラベルのアンカー座標にする（ラベル自体はCSS側でtranslate(-50%, -100%)し、アンカーの
-// 真上・中央に浮くように描画する）。
-export function computeClusterLabelAnchors(members: ClusterMember[], positions: Map<string, Point>): Map<string, Point> {
-  const bounds = new Map<string, { minX: number; maxX: number; minY: number }>();
-  for (const member of members) {
-    const pos = positions.get(member.id);
+  for (const node of nodes) {
+    const pos = g.node(node.id);
     if (!pos) continue;
-    const current = bounds.get(member.clusterKey) ?? { minX: Infinity, maxX: -Infinity, minY: Infinity };
-    current.minX = Math.min(current.minX, pos.x - member.radius);
-    current.maxX = Math.max(current.maxX, pos.x + member.radius);
-    current.minY = Math.min(current.minY, pos.y - member.radius);
-    bounds.set(member.clusterKey, current);
+    // dagreはnodeの中心座標を返すが、React Flowのpositionは左上原点なので変換する。
+    positions.set(node.id, { x: pos.x - node.width / 2, y: pos.y - node.height / 2 });
   }
-
-  const LABEL_GAP = 20;
-  const anchors = new Map<string, Point>();
-  for (const [key, b] of bounds) {
-    anchors.set(key, { x: (b.minX + b.maxX) / 2, y: b.minY - LABEL_GAP });
-  }
-  return anchors;
+  return positions;
 }
 
 const TOPIC_COLOR_PALETTE = ["#2b6cb0", "#c0392b", "#2f855a", "#b7791f", "#6b46c1", "#00838f", "#ad1457", "#4e5d94"];
 
-// 出現順にトピック（クラスタ）へ色を割り当てる。未分類は常に固定のグレーにする
+// 出現順にトピック（ツリー）へ色を割り当てる。未分類は常に固定のグレーにする
 // （「他とは違う」ことが分かるようにするため、パレット循環の対象からは外す）。
 export function buildTopicColorMap(clusterKeys: string[]): Map<string, string> {
   const map = new Map<string, string>();

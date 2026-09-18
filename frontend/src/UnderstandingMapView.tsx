@@ -16,24 +16,27 @@ import type { ConceptRelation, ConceptRelationType, SavedKnowledge, Topic, Under
 import { STATUS_LABELS, effectiveStatus, statusClassName } from "./UnderstandingPage";
 import ConceptNode, { type ConceptNodeData } from "./ConceptNode";
 import TopicNode, { type TopicNodeData } from "./TopicNode";
+import KnowledgeNode, { type KnowledgeNodeData } from "./KnowledgeNode";
 import {
   UNCLASSIFIED_CLUSTER,
   buildTopicColorMap,
-  computeClusterCenters,
-  computeClusterLabelAnchors,
-  computeConceptRadius,
-  computeForceLayout,
+  computeConceptSize,
+  computeHierarchyLayout,
+  computeRootTopicSize,
+  computeSubtopicSize,
+  findRootTopicId,
   getClusterKey,
-  type ForceLinkInput,
-  type ForceNodeInput,
-  type Point,
+  KNOWLEDGE_NODE_HEIGHT,
+  KNOWLEDGE_NODE_WIDTH,
+  type HierarchyEdgeInput,
+  type HierarchyNodeInput,
+  type MapNodeKind,
 } from "./mapLayout";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 
-const NODE_TYPES = { concept: ConceptNode, topic: TopicNode };
-const MINIMAP_THRESHOLD = 15;
-const CLUSTER_LABEL_PREFIX = "cluster-";
+const NODE_TYPES = { concept: ConceptNode, topic: TopicNode, knowledge: KnowledgeNode };
+const MINIMAP_THRESHOLD = 25;
 
 type UnderstandingMapData = {
   topics: Topic[];
@@ -75,9 +78,8 @@ type TopicTreeNode = {
   children: TopicTreeNode[];
 };
 
-// Topic.parentIdから階層ツリーを組み立てる（archived/mergedは除外）。Topic選択のボタン
-// （ルートTopicのみ使用、`.children`は参照しない）を組み立てるために使う。Map上の描画には
-// 使わない（Map上はルートTopicごとのクラスタラベル1つだけで、階層は表示しない）。
+// Topic.parentIdから階層ツリーを組み立てる（archived/mergedは除外）。Topicフィルタのボタン
+// （ルートTopicのみ使用）を組み立てるのと、Topic Viewと同じ木構造をMapでも使うために使う。
 function buildTopicHierarchy(topics: Topic[]): TopicTreeNode[] {
   const active = topics.filter((t) => t.status === "active");
   const childrenByParent = new Map<string | null, Topic[]>();
@@ -99,7 +101,7 @@ function buildTopicHierarchy(topics: Topic[]): TopicTreeNode[] {
   return build(null);
 }
 
-// 指定したTopicとその配下（子孫）すべてのidを集める（Topic選択によるConcept絞り込み用）。
+// 指定したTopicとその配下（子孫）すべてのidを集める（Topicフィルタによるsubtree絞り込み用）。
 function collectDescendantTopicIds(topics: Topic[], rootId: string): Set<string> {
   const childrenByParent = new Map<string, string[]>();
   for (const topic of topics) {
@@ -124,17 +126,7 @@ function collectDescendantTopicIds(topics: Topic[], rootId: string): Set<string>
   return result;
 }
 
-function getVisibleConcepts(
-  activeConcepts: UnderstandingConcept[],
-  topics: Topic[],
-  selectedTopicId: string | null,
-): UnderstandingConcept[] {
-  if (!selectedTopicId) return activeConcepts;
-  const allowed = collectDescendantTopicIds(topics, selectedTopicId);
-  return activeConcepts.filter((c) => c.topicIds.some((id) => allowed.has(id)));
-}
-
-// Conceptに紐づくKnowledgeをconceptIdごとにまとめる（outdatedは詳細一覧からも外す）。
+// Conceptに紐づくKnowledgeをconceptIdごとにまとめる（outdatedはleafからも外す）。
 function countKnowledgeByConcept(knowledge: SavedKnowledge[]): Map<string, SavedKnowledge[]> {
   const map = new Map<string, SavedKnowledge[]>();
   for (const item of knowledge) {
@@ -150,18 +142,16 @@ function countKnowledgeByConcept(knowledge: SavedKnowledge[]): Map<string, Saved
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-function isRecentlyChanged(concept: UnderstandingConcept, knowledgeItems: SavedKnowledge[]): boolean {
-  const now = Date.now();
-  if (now - new Date(concept.createdAt).getTime() <= WEEK_MS) return true;
-  return knowledgeItems.some((k) => now - new Date(k.createdAt).getTime() <= WEEK_MS);
+function isRecent(dateStr: string): boolean {
+  return Date.now() - new Date(dateStr).getTime() <= WEEK_MS;
 }
 
-// Mapは俯瞰用のUIなので、node内のlabelは原則1〜2行に収まる文字数に短縮する
-// （3〜4行に折り返されて読みにくいというユーザー指摘への対応）。フルテキストは
-// ConceptNode.tsx側でtitle属性（hover tooltip）として保持し、詳細パネルでも確認できる。
-const CONCEPT_LABEL_MAX_CHARS = 12;
+// Mapは俯瞰用のUIなので、node内のlabelは原則1〜2行に収まる文字数に短縮する。
+// フルテキストはtitle属性（hover tooltip）と詳細パネルで確認できる。
+const LABEL_MAX_CHARS = 12;
+const KNOWLEDGE_LABEL_MAX_CHARS = 16;
 
-function truncateLabel(text: string, max = CONCEPT_LABEL_MAX_CHARS): string {
+function truncateLabel(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
@@ -175,22 +165,32 @@ const RELATION_TYPE_LABEL: Record<ConceptRelationType, string> = {
   supersedes: "更新",
 };
 
-// relation typeを色分けで複雑化せず、edgeが「つながっている」ことが分かる程度の
-// 控えめな単色＋小さなラベルにとどめる（hover/選択時のみ強調、UnderstandingMapView側で処理）。
-// 矢印（markerEnd）を付け、fromConceptId→toConceptIdの向き（例:「深掘り」ならfromがtoの
-// 理解をさらに広げた側）が見て分かるようにする。
-function buildConceptEdges(relations: ConceptRelation[], visibleIds: Set<string>): Edge[] {
+// ConceptRelation（横断的なつながり）は階層のparent-child edgeより控えめに表示する
+// （階層構造が主役、横断的なつながりは補足という位置づけのため、破線・薄い色にする）。
+function buildCrossRelationEdges(relations: ConceptRelation[], visibleConceptIds: Set<string>): Edge[] {
   return relations
-    .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
+    .filter((r) => visibleConceptIds.has(r.fromConceptId) && visibleConceptIds.has(r.toConceptId))
     .map((r) => ({
       id: r._id,
       source: r.fromConceptId,
       target: r.toConceptId,
       label: RELATION_TYPE_LABEL[r.type],
-      style: { stroke: "#ccc" },
-      labelStyle: { fontSize: 10, fill: "#999" },
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#ccc", width: 14, height: 14 },
+      style: { stroke: "#ddd", strokeDasharray: "3 3" },
+      labelStyle: { fontSize: 9, fill: "#aaa" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#ddd", width: 10, height: 10 },
+      zIndex: 0,
     }));
+}
+
+function buildParentChildEdges(edges: HierarchyEdgeInput[]): Edge[] {
+  return edges.map((e) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    style: { stroke: "#bbb", strokeWidth: 1.5 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: "#bbb", width: 12, height: 12 },
+    zIndex: 1,
+  }));
 }
 
 function computeMapSummary(
@@ -225,30 +225,121 @@ function buildTopicBreadcrumb(topics: Topic[], topicId: string): string[] {
   return chain;
 }
 
-// Conceptの検索対象テキストを作る簡易全文検索。Concept名を優先し、名前に一致しない場合だけ
-// 紐づくKnowledgeのstatementも見る（結果は常にConcept単位で返す。Embedding/Semantic Searchは
-// 今回のスコープ外で、単純な部分一致のみ）。
-function searchConcepts(
-  concepts: UnderstandingConcept[],
-  knowledgeByConcept: Map<string, SavedKnowledge[]>,
+type SelectedNode = { kind: "topic"; id: string } | { kind: "concept"; id: string } | { kind: "knowledge"; id: string };
+
+type SearchResult =
+  | { kind: "topic"; id: string; label: string; sublabel: string }
+  | { kind: "concept"; id: string; label: string; sublabel: string }
+  | { kind: "knowledge"; id: string; label: string; sublabel: string };
+
+// Topic / Subtopic / Concept / Knowledgeを横断した単純な部分一致検索。結果は種別ラベル付きで
+// 表示し、選択するとその種別に応じたNodeへフォーカスする。
+function searchMap(
   query: string,
+  topics: Topic[],
+  concepts: UnderstandingConcept[],
+  knowledge: SavedKnowledge[],
+  topicById: Map<string, Topic>,
   limit = 20,
-): UnderstandingConcept[] {
+): SearchResult[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  const nameMatches: UnderstandingConcept[] = [];
-  const statementMatches: UnderstandingConcept[] = [];
-  for (const concept of concepts) {
-    if (concept.name.toLowerCase().includes(q)) {
-      nameMatches.push(concept);
-      continue;
-    }
-    const items = knowledgeByConcept.get(concept._id) ?? [];
-    if (items.some((item) => item.statement.toLowerCase().includes(q))) {
-      statementMatches.push(concept);
-    }
+  const results: SearchResult[] = [];
+
+  for (const t of topics) {
+    if (t.status !== "active") continue;
+    if (!t.name.toLowerCase().includes(q)) continue;
+    const breadcrumb = buildTopicBreadcrumb(topics, t._id);
+    results.push({
+      kind: "topic",
+      id: t._id,
+      label: t.name,
+      sublabel: breadcrumb.slice(0, -1).join(" > ") || (t.parentId ? "" : "ルートTopic"),
+    });
   }
-  return [...nameMatches, ...statementMatches].slice(0, limit);
+
+  for (const c of concepts) {
+    if (c.status !== "active") continue;
+    if (!c.name.toLowerCase().includes(q)) continue;
+    const topicName = c.topicIds[0] ? (topicById.get(c.topicIds[0])?.name ?? "") : "未分類";
+    results.push({ kind: "concept", id: c._id, label: c.name, sublabel: topicName });
+  }
+
+  for (const k of knowledge) {
+    if (effectiveStatus(k) === "outdated") continue;
+    if (!k.concept.toLowerCase().includes(q) && !k.statement.toLowerCase().includes(q)) continue;
+    results.push({ kind: "knowledge", id: k._id, label: k.concept, sublabel: truncateLabel(k.statement, 28) });
+  }
+
+  return results.slice(0, limit);
+}
+
+function TopicDetailPanel({
+  topic,
+  topics,
+  concepts,
+  onClose,
+  onSelectConcept,
+  onSelectTopic,
+}: {
+  topic: Topic;
+  topics: Topic[];
+  concepts: UnderstandingConcept[];
+  onClose: () => void;
+  onSelectConcept: (id: string) => void;
+  onSelectTopic: (id: string) => void;
+}) {
+  const breadcrumb = buildTopicBreadcrumb(topics, topic._id);
+  const childTopics = useMemo(
+    () => topics.filter((t) => t.status === "active" && t.parentId === topic._id),
+    [topics, topic._id],
+  );
+  const directConcepts = useMemo(
+    () => concepts.filter((c) => c.status === "active" && c.topicIds[0] === topic._id),
+    [concepts, topic._id],
+  );
+
+  return (
+    <div className="concept-detail-panel">
+      <div className="concept-detail-header">
+        <h3>{topic.name}</h3>
+        <button type="button" className="modal-close" onClick={onClose} aria-label="閉じる">
+          ×
+        </button>
+      </div>
+      {breadcrumb.length > 1 && <p className="concept-detail-breadcrumb">{breadcrumb.join(" > ")}</p>}
+
+      {childTopics.length > 0 && (
+        <>
+          <h4 className="concept-detail-section-title">配下のトピック</h4>
+          <ul className="concept-detail-related-list">
+            {childTopics.map((t) => (
+              <li key={t._id}>
+                <button type="button" className="topic-item-button" onClick={() => onSelectTopic(t._id)}>
+                  {t.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <h4 className="concept-detail-section-title">このトピックの概念</h4>
+      {directConcepts.length === 0 ? (
+        <p className="concept-detail-empty">まだこのトピックに直接紐づく概念はありません。</p>
+      ) : (
+        <ul className="concept-detail-related-list">
+          {directConcepts.map((c) => (
+            <li key={c._id}>
+              <button type="button" className="topic-item-button" onClick={() => onSelectConcept(c._id)}>
+                {c.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function ConceptDetailPanel({
@@ -259,6 +350,7 @@ function ConceptDetailPanel({
   knowledgeItems,
   onClose,
   onSelectConcept,
+  onSelectKnowledge,
 }: {
   concept: UnderstandingConcept;
   topics: Topic[];
@@ -267,13 +359,12 @@ function ConceptDetailPanel({
   knowledgeItems: SavedKnowledge[];
   onClose: () => void;
   onSelectConcept: (conceptId: string) => void;
+  onSelectKnowledge: (knowledgeId: string) => void;
 }) {
   const conceptById = useMemo(() => new Map(concepts.map((c) => [c._id, c])), [concepts]);
   const breadcrumb = concept.topicIds[0] ? buildTopicBreadcrumb(topics, concept.topicIds[0]) : [];
 
-  // 「関連する理解」＝1-hopのConceptだけを表示する（MVPでは2-hopまで広げない）。
-  // これをクリックすると、Map上の該当Nodeへ移動してそのConceptを選択状態にする
-  // （Detail Panel/Map双方から辿れるようにする、というNeighbor Navigationの要件）。
+  // 「関連する概念」＝1-hopのConceptだけを表示する（MVPでは2-hopまで広げない）。
   const relatedConceptIds = useMemo(() => {
     const ids = new Set<string>();
     for (const r of relations) {
@@ -302,7 +393,13 @@ function ConceptDetailPanel({
             const status = effectiveStatus(item);
             return (
               <li key={item._id} className={statusClassName(item)}>
-                <p className="concept-detail-knowledge-statement">{item.statement}</p>
+                <button
+                  type="button"
+                  className="concept-detail-knowledge-link"
+                  onClick={() => onSelectKnowledge(item._id)}
+                >
+                  <p className="concept-detail-knowledge-statement">{item.statement}</p>
+                </button>
                 <p className="concept-detail-knowledge-meta">
                   {status !== "active" && <span className="understanding-item-status">{STATUS_LABELS[status]}</span>}
                   <a href={item.source.url} target="_blank" rel="noreferrer">
@@ -337,6 +434,63 @@ function ConceptDetailPanel({
   );
 }
 
+function KnowledgeDetailPanel({
+  item,
+  concepts,
+  topics,
+  onClose,
+  onSelectConcept,
+}: {
+  item: SavedKnowledge;
+  concepts: UnderstandingConcept[];
+  topics: Topic[];
+  onClose: () => void;
+  onSelectConcept: (id: string) => void;
+}) {
+  const conceptId = item.conceptIds?.[0];
+  const concept = conceptId ? concepts.find((c) => c._id === conceptId) : undefined;
+  const breadcrumb = concept?.topicIds[0] ? buildTopicBreadcrumb(topics, concept.topicIds[0]) : [];
+  const status = effectiveStatus(item);
+
+  return (
+    <div className="concept-detail-panel">
+      <div className="concept-detail-header">
+        <h3>{item.concept}</h3>
+        <button type="button" className="modal-close" onClick={onClose} aria-label="閉じる">
+          ×
+        </button>
+      </div>
+      {breadcrumb.length > 0 && (
+        <p className="concept-detail-breadcrumb">
+          {[...breadcrumb, concept?.name].filter(Boolean).join(" > ")}
+        </p>
+      )}
+
+      <h4 className="concept-detail-section-title">自分が理解していること</h4>
+      <p className={`concept-detail-knowledge-statement ${statusClassName(item)}`}>{item.statement}</p>
+      <p className="concept-detail-knowledge-meta">
+        {status !== "active" && <span className="understanding-item-status">{STATUS_LABELS[status]}</span>}
+        <a href={item.source.url} target="_blank" rel="noreferrer">
+          {item.source.title}
+        </a>
+      </p>
+
+      {concept && (
+        <>
+          <h4 className="concept-detail-section-title">所属する概念</h4>
+          <ul className="concept-detail-related-list">
+            <li>
+              <button type="button" className="topic-item-button" onClick={() => onSelectConcept(concept._id)}>
+                {concept.name}
+              </button>
+            </li>
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function UnderstandingMapView({
   knowledge,
   initialTopicName,
@@ -350,7 +504,7 @@ export default function UnderstandingMapView({
   // Topicのボタンは最初はルートTopicを5個までしか出さず（増えすぎると場所を取るため）、
   // 「もっと表示する」を押すと全件表示に切り替える。
   const [topicFilterExpanded, setTopicFilterExpanded] = useState(false);
-  const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -359,17 +513,15 @@ export default function UnderstandingMapView({
   const appliedInitialTopicRef = useRef(false);
 
   // 検索は「見たいものが既に決まっている」ときの直接アクセス、Mapは「周辺を辿りながら
-  // 発見する」もの、という役割分担にする（検索結果はConcept単位、Map全体からの手探りを
-  // 不要にする）。
+  // 発見する」もの、という役割分担にする。
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  // 検索やDetail Panelの「関連する概念」から選んだConceptが、現在のTopicフィルタ/階層深さの
-  // 都合でまだMap上に存在しない場合に、フィルタ解除後の再描画を待ってからカメラを寄せるための
-  // 一時的な保留id。
-  const [pendingFocusConceptId, setPendingFocusConceptId] = useState<string | null>(null);
+  // 検索やDetail Panelから選んだNodeが、現在のTopicフィルタの都合でまだMap上に存在しない
+  // 場合に、フィルタ解除後の再描画を待ってからカメラを寄せるための一時的な保留id。
+  const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | TopicNodeData>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | TopicNodeData | KnowledgeNodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
   const nodesRef = useRef<Node[]>([]);
   useEffect(() => {
@@ -401,7 +553,7 @@ export default function UnderstandingMapView({
     if (appliedInitialTopicRef.current) return;
     if (mapState.status !== "success" || !initialTopicName) return;
     const match = mapState.topics.find((t) => t.status === "active" && t.name === initialTopicName);
-    if (match) setSelectedTopicId(match._id);
+    if (match) setSelectedTopicId(findRootTopicId(mapState.topics, match._id));
     appliedInitialTopicRef.current = true;
   }, [mapState, initialTopicName]);
 
@@ -435,20 +587,11 @@ export default function UnderstandingMapView({
   const concepts = mapState.status === "success" ? mapState.concepts : [];
   const relations = mapState.status === "success" ? mapState.relations : [];
 
+  const activeTopics = useMemo(() => topics.filter((t) => t.status === "active"), [topics]);
   const activeConcepts = useMemo(() => concepts.filter((c) => c.status === "active"), [concepts]);
   const knowledgeByConcept = useMemo(() => countKnowledgeByConcept(knowledge), [knowledge]);
   const topicById = useMemo(() => new Map(topics.map((t) => [t._id, t])), [topics]);
   const topicHierarchy = useMemo(() => buildTopicHierarchy(topics), [topics]);
-  const visibleConcepts = useMemo(
-    () => getVisibleConcepts(activeConcepts, topics, selectedTopicId),
-    [activeConcepts, topics, selectedTopicId],
-  );
-  // Topicのボタンはルートトピック（parentIdが無いもの）だけを表示する。
-  const rootTopics = useMemo(() => topicHierarchy.map((t) => ({ id: t.id, name: t.name })), [topicHierarchy]);
-  const TOPIC_CHIP_LIMIT = 5;
-  const visibleTopicChips = topicFilterExpanded ? rootTopics : rootTopics.slice(0, TOPIC_CHIP_LIMIT);
-  const hasMoreTopicChips = rootTopics.length > TOPIC_CHIP_LIMIT;
-  const visibleIds = useMemo(() => new Set(visibleConcepts.map((c) => c._id)), [visibleConcepts]);
   const allClusterKeys = useMemo(
     () => Array.from(new Set(activeConcepts.map((c) => getClusterKey(c, topics)))),
     [activeConcepts, topics],
@@ -462,112 +605,201 @@ export default function UnderstandingMapView({
     () => activeConcepts.filter((c) => c.topicIds.length === 0).length,
     [activeConcepts],
   );
+
+  // Topicのボタンはルートトピック（parentIdが無いもの）だけを表示する。
+  const rootTopics = useMemo(() => topicHierarchy.map((t) => ({ id: t.id, name: t.name })), [topicHierarchy]);
+  const TOPIC_CHIP_LIMIT = 5;
+  const visibleTopicChips = topicFilterExpanded ? rootTopics : rootTopics.slice(0, TOPIC_CHIP_LIMIT);
+  const hasMoreTopicChips = rootTopics.length > TOPIC_CHIP_LIMIT;
+
+  // 「すべて」なら全Topic、選択中なら選択Topicとその子孫だけをMapの対象にする
+  // （Topic Viewと同じ、Topic.parentId由来の階層をそのままsubtree絞り込みに使う）。
+  const relevantTopicIds = useMemo(() => {
+    if (!selectedTopicId) return new Set(activeTopics.map((t) => t._id));
+    return collectDescendantTopicIds(topics, selectedTopicId);
+  }, [activeTopics, topics, selectedTopicId]);
+
+  const relevantConcepts = useMemo(() => {
+    return activeConcepts.filter((c) => {
+      if (c.topicIds.length === 0) return selectedTopicId === null; // 未分類は「すべて」のときだけ
+      return c.topicIds.some((id) => relevantTopicIds.has(id));
+    });
+  }, [activeConcepts, relevantTopicIds, selectedTopicId]);
+
+  const relevantConceptIds = useMemo(() => new Set(relevantConcepts.map((c) => c._id)), [relevantConcepts]);
+
   const searchResults = useMemo(
-    () => searchConcepts(activeConcepts, knowledgeByConcept, searchQuery),
-    [activeConcepts, knowledgeByConcept, searchQuery],
+    () => searchMap(searchQuery, topics, activeConcepts, knowledge, topicById),
+    [searchQuery, topics, activeConcepts, knowledge, topicById],
   );
 
-  // ノードの初期配置（force-directed layout）を計算し、React Flowのnodes/edges stateへ反映する。
-  // Topicはforce simulationに参加しない（Concept nodeだけを物理演算し、Topicは最終座標から
-  // 逆算したクラスタラベルとして後から重ねる）。
-  // resetPositions=falseのときは直前の位置をwarm startとして使い（ドラッグ位置・既存クラスタの
-  // 位置を尊重）、resetPositions=true（「整列」ボタン）のときは全ノードをクラスタ中心付近へ
-  // 再シードする。この関数は「①データ取得/更新」「②Topic/階層/弱いつながりフィルタ変更」
-  // 「③整列ボタン」からしか呼ばれない（hoverや詳細パネルの開閉など他の再レンダーでは
-  // 呼ばれない）ため、ユーザーがドラッグした位置がそれ以外のタイミングで勝手に戻ることはない。
-  function recomputeLayout(resetPositions: boolean) {
-    const forceNodes: ForceNodeInput[] = visibleConcepts.map((concept) => ({
-      id: concept._id,
-      clusterKey: getClusterKey(concept, topics),
-      radius: computeConceptRadius((knowledgeByConcept.get(concept._id) ?? []).length),
-    }));
+  // Root Topic → Subtopic → Concept → Knowledgeという階層をそのままMapの骨格として
+  // dagreでレイアウトする（force layoutはやめた）。ConceptRelation（横断的なつながり）は
+  // レイアウトには使わず、位置が決まった後に見た目だけの補助edgeとして重ねる。
+  // relationが0件でもTopic hierarchyだけでMapとして成立する。
+  function recomputeLayout() {
+    const relevantTopics = activeTopics.filter((t) => relevantTopicIds.has(t._id));
+    const topicChildCount = new Map<string, number>();
+    for (const t of relevantTopics) {
+      if (t.parentId && relevantTopicIds.has(t.parentId)) {
+        topicChildCount.set(t.parentId, (topicChildCount.get(t.parentId) ?? 0) + 1);
+      }
+    }
+    for (const c of relevantConcepts) {
+      const parentTopicId = c.topicIds[0];
+      if (parentTopicId) topicChildCount.set(parentTopicId, (topicChildCount.get(parentTopicId) ?? 0) + 1);
+    }
 
-    const clusterKeysSet = new Set(forceNodes.map((n) => n.clusterKey));
-    const clusterCenters = computeClusterCenters(Array.from(clusterKeysSet));
+    const hasUnclassified = selectedTopicId === null && relevantConcepts.some((c) => c.topicIds.length === 0);
 
-    const forceLinks: ForceLinkInput[] = relations
-      .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
-      .map((r) => ({ source: r.fromConceptId, target: r.toConceptId }));
+    const hierarchyNodes: HierarchyNodeInput[] = [];
+    const hierarchyEdges: HierarchyEdgeInput[] = [];
 
-    const previousPositions = resetPositions
-      ? undefined
-      : new Map<string, Point>(
-          nodesRef.current.filter((n) => n.type === "concept").map((n) => [n.id, n.position]),
-        );
-    const positions = computeForceLayout(forceNodes, forceLinks, clusterCenters, previousPositions);
-    const clusterLabelAnchors = computeClusterLabelAnchors(forceNodes, positions);
+    for (const t of relevantTopics) {
+      const isRoot = !t.parentId;
+      const size = isRoot
+        ? computeRootTopicSize(topicChildCount.get(t._id) ?? 0)
+        : computeSubtopicSize(topicChildCount.get(t._id) ?? 0);
+      hierarchyNodes.push({ id: t._id, kind: isRoot ? "rootTopic" : "subtopic", width: size, height: size });
+      if (t.parentId && relevantTopicIds.has(t.parentId)) {
+        hierarchyEdges.push({ id: `topic-${t.parentId}-${t._id}`, source: t.parentId, target: t._id });
+      }
+    }
+
+    if (hasUnclassified) {
+      const count = relevantConcepts.filter((c) => c.topicIds.length === 0).length;
+      hierarchyNodes.push({
+        id: UNCLASSIFIED_CLUSTER,
+        kind: "rootTopic",
+        width: computeRootTopicSize(count),
+        height: computeRootTopicSize(count),
+      });
+    }
+
+    const knowledgeByConceptFiltered = new Map<string, SavedKnowledge[]>();
+    for (const c of relevantConcepts) {
+      knowledgeByConceptFiltered.set(c._id, knowledgeByConcept.get(c._id) ?? []);
+    }
+
+    for (const c of relevantConcepts) {
+      const knowledgeItems = knowledgeByConceptFiltered.get(c._id) ?? [];
+      const size = computeConceptSize(knowledgeItems.length);
+      hierarchyNodes.push({ id: c._id, kind: "concept", width: size, height: size });
+      const parentTopicId = c.topicIds[0];
+      if (parentTopicId && relevantTopicIds.has(parentTopicId)) {
+        hierarchyEdges.push({ id: `topic-concept-${parentTopicId}-${c._id}`, source: parentTopicId, target: c._id });
+      } else if (!parentTopicId && hasUnclassified) {
+        hierarchyEdges.push({ id: `topic-concept-${UNCLASSIFIED_CLUSTER}-${c._id}`, source: UNCLASSIFIED_CLUSTER, target: c._id });
+      }
+
+      // Knowledgeは同じConceptに複数紐づくことがあるため、木として1本の親だけを持たせる
+      // （そのKnowledge自身のconceptIds[0]がこのConceptと一致するときだけleafにする）。
+      for (const item of knowledgeItems) {
+        if ((item.conceptIds ?? [])[0] !== c._id) continue;
+        hierarchyNodes.push({ id: item._id, kind: "knowledge", width: KNOWLEDGE_NODE_WIDTH, height: KNOWLEDGE_NODE_HEIGHT });
+        hierarchyEdges.push({ id: `concept-knowledge-${c._id}-${item._id}`, source: c._id, target: item._id });
+      }
+    }
+
+    const positions = computeHierarchyLayout(hierarchyNodes, hierarchyEdges, "LR");
 
     const newNodes: Node[] = [];
-
-    // Topicのクラスタラベルは背景として先に積む（Concept nodeより後に描画されないよう、
-    // 配列の先頭に置く。ドラッグ・選択の対象にはしない）。
-    for (const [clusterKey, anchor] of clusterLabelAnchors) {
+    for (const t of relevantTopics) {
+      const pos = positions.get(t._id) ?? { x: 0, y: 0 };
+      const isRoot = !t.parentId;
+      const size = isRoot
+        ? computeRootTopicSize(topicChildCount.get(t._id) ?? 0)
+        : computeSubtopicSize(topicChildCount.get(t._id) ?? 0);
+      const rootId = findRootTopicId(topics, t._id);
       const data: TopicNodeData = {
-        name: clusterKey === UNCLASSIFIED_CLUSTER ? "未分類" : (topicById.get(clusterKey)?.name ?? ""),
-        color: topicColorMap.get(clusterKey) ?? "#888",
+        name: t.name,
+        variant: isRoot ? "root" : "sub",
+        color: topicColorMap.get(rootId) ?? "#888",
+        size,
+        dimmed: false,
+        highlighted: false,
+      };
+      newNodes.push({ id: t._id, type: "topic", position: pos, data, style: { width: size, height: size }, zIndex: 2 });
+    }
+    if (hasUnclassified) {
+      const pos = positions.get(UNCLASSIFIED_CLUSTER) ?? { x: 0, y: 0 };
+      const count = relevantConcepts.filter((c) => c.topicIds.length === 0).length;
+      const size = computeRootTopicSize(count);
+      const data: TopicNodeData = {
+        name: "未分類",
+        variant: "root",
+        color: "#999999",
+        size,
         dimmed: false,
         highlighted: false,
       };
       newNodes.push({
-        id: `${CLUSTER_LABEL_PREFIX}${clusterKey}`,
+        id: UNCLASSIFIED_CLUSTER,
         type: "topic",
-        position: anchor,
+        position: pos,
         data,
-        draggable: false,
-        selectable: false,
-        zIndex: 0,
+        style: { width: size, height: size },
+        zIndex: 2,
       });
     }
 
-    for (const concept of visibleConcepts) {
-      const pos = positions.get(concept._id) ?? { x: 0, y: 0 };
-      const knowledgeItems = knowledgeByConcept.get(concept._id) ?? [];
-      const clusterKey = getClusterKey(concept, topics);
+    for (const c of relevantConcepts) {
+      const pos = positions.get(c._id) ?? { x: 0, y: 0 };
+      const knowledgeItems = knowledgeByConceptFiltered.get(c._id) ?? [];
+      const size = computeConceptSize(knowledgeItems.length);
+      const clusterKey = getClusterKey(c, topics);
       const data: ConceptNodeData = {
-        name: concept.name,
-        label: truncateLabel(concept.name),
+        name: c.name,
+        label: truncateLabel(c.name, LABEL_MAX_CHARS),
         knowledgeCount: knowledgeItems.length,
         color: topicColorMap.get(clusterKey) ?? "#2b6cb0",
-        isNew: isRecentlyChanged(concept, knowledgeItems),
         dimmed: false,
         highlighted: false,
         selected: false,
-        radius: computeConceptRadius(knowledgeItems.length),
+        size,
       };
-      const size = data.radius * 2;
-      // node.styleで幅・高さを明示しておく。指定しないとReact FlowがDOMを実測するまで
-      // 正確な大きさが分からず、初期のfitViewが「実測後の再fitView」で上書きされてしまい、
-      // 検索/関連Concept選択直後のsetCenter（panToNode）と競合してカメラが意図せず
-      // 全体表示に戻ってしまうことがあったため（実データで再現・原因を特定済み）。
-      newNodes.push({
-        id: concept._id,
-        type: "concept",
-        position: pos,
-        data,
-        zIndex: 1,
-        style: { width: size, height: size },
-      });
+      newNodes.push({ id: c._id, type: "concept", position: pos, data, style: { width: size, height: size }, zIndex: 2 });
+
+      for (const item of knowledgeItems) {
+        if ((item.conceptIds ?? [])[0] !== c._id) continue;
+        const kPos = positions.get(item._id) ?? { x: 0, y: 0 };
+        const kData: KnowledgeNodeData = {
+          label: truncateLabel(item.statement, KNOWLEDGE_LABEL_MAX_CHARS),
+          fullText: item.statement,
+          isNew: isRecent(item.createdAt),
+          color: topicColorMap.get(clusterKey) ?? "#2b6cb0",
+          dimmed: false,
+          highlighted: false,
+        };
+        newNodes.push({
+          id: item._id,
+          type: "knowledge",
+          position: kPos,
+          data: kData,
+          style: { width: KNOWLEDGE_NODE_WIDTH, height: KNOWLEDGE_NODE_HEIGHT },
+          zIndex: 2,
+        });
+      }
     }
 
     setNodes(newNodes);
-    setEdges(buildConceptEdges(relations, visibleIds));
+    setEdges([...buildParentChildEdges(hierarchyEdges), ...buildCrossRelationEdges(relations, relevantConceptIds)]);
     setLayoutVersion((v) => v + 1);
   }
 
-  // トリガー①②: データ取得・更新（mapStateの参照が変わる）とTopic/階層深さ/弱いつながり表示の
-  // フィルタ変更。eslint的なexhaustive-depsはあえて満たさず、この変化だけを明示的なトリガーにする
-  // （visibleConcepts等の派生値まで依存に含めると、hoverや詳細パネル開閉のたびに
-  // レイアウトが再計算されてしまうため）。
+  // トリガー①②: データ取得・更新（mapStateの参照が変わる）とTopicフィルタ変更。
+  // dagreは決定的なレイアウトのため（d3-forceと違いwarm startは不要）、この2つの変化と
+  // 「整列」ボタンだけを明示的なトリガーにする（visibleConcepts等の派生値まで依存に含めると、
+  // hoverや詳細パネル開閉のたびにレイアウトが再計算されてしまうため）。
   useEffect(() => {
     if (mapState.status !== "success") return;
-    recomputeLayout(false);
+    recomputeLayout();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTopicId, mapState]);
 
-  // Nodeを辿る体験の中心となる「隣接（1-hop）強調」。hoverは一時的なプレビュー、
-  // 選択中Conceptの強調はそれが無いときのフォールバックとして働く（優先順位:
-  // hover > 選択中）。Topic nodeはこの隣接関係の対象に含めない（Topicはedgeを
-  // 持たないクラスタラベルのため、hoverしても無関係なConceptまで薄くしない）。
+  // Nodeを辿る体験の中心となる「隣接強調」。parent-child edgeとConceptRelationの
+  // 両方を対象に、hoverまたは選択中のnodeと直接つながるnode・edgeだけを強調し、
+  // それ以外を薄くする（優先順位: hover > 選択中）。
   const hoverNeighborIds = useMemo(() => {
     if (!hoveredNodeId) return null;
     const ids = new Set<string>([hoveredNodeId]);
@@ -579,14 +811,14 @@ export default function UnderstandingMapView({
   }, [hoveredNodeId, edges]);
 
   const selectionNeighborIds = useMemo(() => {
-    if (!selectedConceptId) return null;
-    const ids = new Set<string>([selectedConceptId]);
+    if (!selectedNode) return null;
+    const ids = new Set<string>([selectedNode.id]);
     for (const e of edges) {
-      if (e.source === selectedConceptId) ids.add(e.target);
-      if (e.target === selectedConceptId) ids.add(e.source);
+      if (e.source === selectedNode.id) ids.add(e.target);
+      if (e.target === selectedNode.id) ids.add(e.source);
     }
     return ids;
-  }, [selectedConceptId, edges]);
+  }, [selectedNode, edges]);
 
   const activeNeighborIds = hoverNeighborIds ?? selectionNeighborIds;
 
@@ -595,102 +827,107 @@ export default function UnderstandingMapView({
       const highlighted = activeNeighborIds ? activeNeighborIds.has(n.id) : false;
       const dimmed = activeNeighborIds ? !highlighted : false;
       if (n.type === "concept") {
-        const selected = n.id === selectedConceptId;
+        const selected = selectedNode?.kind === "concept" && selectedNode.id === n.id;
         return { ...n, data: { ...n.data, highlighted, dimmed, selected } };
       }
       return { ...n, data: { ...n.data, highlighted, dimmed } };
     });
-  }, [nodes, activeNeighborIds, selectedConceptId]);
+  }, [nodes, activeNeighborIds, selectedNode]);
 
   const displayEdges = useMemo(() => {
     if (!activeNeighborIds) return edges;
-    const focusId = hoveredNodeId ?? selectedConceptId;
+    const focusId = hoveredNodeId ?? selectedNode?.id;
     return edges.map((e) => {
       const touches = e.source === focusId || e.target === focusId;
       return {
         ...e,
         style: { ...e.style, stroke: touches ? "#2b6cb0" : "#eee" },
-        labelStyle: e.label ? { fontSize: 10, fill: touches ? "#2b6cb0" : "#ddd" } : undefined,
-        markerEnd: e.markerEnd
-          ? { type: MarkerType.ArrowClosed, color: touches ? "#2b6cb0" : "#eee" }
-          : undefined,
+        labelStyle: e.label ? { fontSize: 9, fill: touches ? "#2b6cb0" : "#eee" } : undefined,
+        markerEnd: e.markerEnd ? { type: MarkerType.ArrowClosed, color: touches ? "#2b6cb0" : "#eee" } : undefined,
         zIndex: touches ? 1 : 0,
       };
     });
-  }, [edges, activeNeighborIds, hoveredNodeId, selectedConceptId]);
+  }, [edges, activeNeighborIds, hoveredNodeId, selectedNode]);
 
-  const selectedConcept = useMemo(
-    () => activeConcepts.find((c) => c._id === selectedConceptId) ?? null,
-    [activeConcepts, selectedConceptId],
-  );
+  const selectedTopic = useMemo(() => {
+    if (selectedNode?.kind !== "topic") return null;
+    if (selectedNode.id === UNCLASSIFIED_CLUSTER) return null;
+    return topics.find((t) => t._id === selectedNode.id) ?? null;
+  }, [selectedNode, topics]);
+  const selectedConcept = useMemo(() => {
+    if (selectedNode?.kind !== "concept") return null;
+    return activeConcepts.find((c) => c._id === selectedNode.id) ?? null;
+  }, [selectedNode, activeConcepts]);
+  const selectedKnowledge = useMemo(() => {
+    if (selectedNode?.kind !== "knowledge") return null;
+    return knowledge.find((k) => k._id === selectedNode.id) ?? null;
+  }, [selectedNode, knowledge]);
   const selectedConceptKnowledge = useMemo(
     () => (selectedConcept ? (knowledgeByConcept.get(selectedConcept._id) ?? []) : []),
     [selectedConcept, knowledgeByConcept],
   );
+  const hasSelection = selectedNode !== null;
 
-  // 選択中Conceptへカメラを寄せる。「必要に応じて少し寄せる」程度にとどめ、既にある程度
+  // 選択中Nodeへカメラを寄せる。「必要に応じて少し寄せる」程度にとどめ、既にある程度
   // ズームしていればそのズームレベルを保つ（毎回激しくzoom/panすると位置感覚を失うため）。
-  function panToNode(conceptId: string) {
+  function panToNode(id: string) {
     const instance = reactFlowInstanceRef.current;
-    const node = nodesRef.current.find((n) => n.id === conceptId);
+    const node = nodesRef.current.find((n) => n.id === id);
     if (!instance || !node) return;
-    const data = node.data as ConceptNodeData;
+    const width = typeof node.style?.width === "number" ? node.style.width : 40;
+    const height = typeof node.style?.height === "number" ? node.style.height : 40;
     const currentZoom = instance.getZoom();
     const targetZoom = currentZoom < 0.6 ? 0.8 : currentZoom;
-    instance.setCenter(node.position.x + data.radius, node.position.y + data.radius, {
+    instance.setCenter(node.position.x + width / 2, node.position.y + height / 2, {
       zoom: targetZoom,
       duration: 450,
     });
   }
 
   // 保留中のフォーカス要求（フィルタ解除待ち）を、対象Nodeが実際にnodesへ現れたタイミングで
-  // 消化する。ReactFlowインスタンスはkeyの変化で再マウントされるため、onInit経由でrefが
-  // 更新されるのを少し待ってからsetCenterを呼ぶ。
+  // 消化する。
   useEffect(() => {
-    if (!pendingFocusConceptId) return;
-    const found = nodes.some((n) => n.id === pendingFocusConceptId);
+    if (!pendingFocusId) return;
+    const found = nodes.some((n) => n.id === pendingFocusId);
     if (!found) return;
-    const targetId = pendingFocusConceptId;
-    // ここでsetPendingFocusConceptId(null)を同期的に呼ぶと、それ自体がこのeffectの
-    // 依存配列（pendingFocusConceptId）を変化させて次回実行のcleanupを即座に走らせ、
-    // 発火前のtimerがclearTimeoutされてしまう（実データで再現・原因を特定済み）。
-    // そのためpanToNode実行後、コールバック内でクリアする。
+    const targetId = pendingFocusId;
     const timer = setTimeout(() => {
       panToNode(targetId);
-      setPendingFocusConceptId(null);
+      setPendingFocusId(null);
     }, 150);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, pendingFocusConceptId]);
+  }, [nodes, pendingFocusId]);
 
-  function handleSelectTopic(id: string | null) {
+  function handleSelectTopicFilter(id: string | null) {
     setSelectedTopicId(id);
   }
 
   // Map上で直接Nodeをクリックしたときの選択（既に見えている位置なので、カメラは動かさない）。
-  function handleSelectConcept(id: string) {
-    setSelectedConceptId(id);
+  function handleSelectNode(node: SelectedNode) {
+    setSelectedNode(node);
     setMobileDetailOpen(true);
   }
 
-  // 検索結果選択・Detail Panelの「関連する概念」クリックなど、今見ている場所とは離れた
-  // Conceptへ「辿る/移動する」ときの選択。現在のTopicフィルタで隠れている場合はフィルタを
+  // 検索結果選択・Detail Panelからのnavigationなど、今見ている場所とは離れたNodeへ
+  // 「辿る/移動する」ときの選択。現在のTopicフィルタで隠れている場合はフィルタを
   // 解除してから、そうでなければ即座にカメラを寄せる。
-  function focusConcept(id: string) {
-    setSelectedConceptId(id);
+  function focusNode(node: SelectedNode) {
+    setSelectedNode(node);
     setMobileDetailOpen(true);
     setSearchOpen(false);
     setSearchQuery("");
-    if (visibleIds.has(id)) {
-      panToNode(id);
+    const isVisible = nodesRef.current.some((n) => n.id === node.id);
+    if (isVisible) {
+      panToNode(node.id);
     } else {
-      setPendingFocusConceptId(id);
+      setPendingFocusId(node.id);
       setSelectedTopicId(null);
     }
   }
 
   function handleCloseDetail() {
-    setSelectedConceptId(null);
+    setSelectedNode(null);
     setMobileDetailOpen(false);
   }
 
@@ -753,7 +990,7 @@ export default function UnderstandingMapView({
           今週 +{summary.recentKnowledge}件の理解 ・ +{summary.recentRelations}件のつながり
         </p>
         <div className="map-toolbar-buttons">
-          <button type="button" className="map-refresh-button" onClick={() => recomputeLayout(true)}>
+          <button type="button" className="map-refresh-button" onClick={() => recomputeLayout()}>
             整列
           </button>
           <button type="button" className="map-refresh-button" onClick={handleRefresh} disabled={refreshing}>
@@ -767,8 +1004,8 @@ export default function UnderstandingMapView({
       </div>
       {refreshError && <p className="error-message">{refreshError}</p>}
 
-      {/* 検索は「見たいものが既に決まっている」ときの直接アクセス。Concept名を優先し、
-          一致しなければ紐づくKnowledgeのstatementも見るが、結果は常にConcept単位で出す。 */}
+      {/* 検索対象はTopic/Subtopic/Concept/Knowledgeすべて。「見たいものが既に決まっている」
+          ときの直接アクセスとして使う。結果を選ぶと該当Nodeへフォーカスする。 */}
       <div className="map-search-bar">
         <div className="map-search-box">
           <input
@@ -797,18 +1034,19 @@ export default function UnderstandingMapView({
               {searchResults.length === 0 ? (
                 <li className="map-search-empty">該当する理解はまだありません</li>
               ) : (
-                searchResults.map((c) => (
-                  <li key={c._id}>
+                searchResults.map((r) => (
+                  <li key={`${r.kind}-${r.id}`}>
                     <button
                       type="button"
                       className="map-search-result"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => focusConcept(c._id)}
+                      onClick={() => focusNode({ kind: r.kind, id: r.id } as SelectedNode)}
                     >
-                      <span className="map-search-result-name">{c.name}</span>
-                      {c.topicIds[0] && (
-                        <span className="map-search-result-topic">{topicById.get(c.topicIds[0])?.name ?? ""}</span>
-                      )}
+                      <span className={`map-search-result-kind map-search-result-kind-${r.kind}`}>
+                        {r.kind === "topic" ? "トピック" : r.kind === "concept" ? "概念" : "理解"}
+                      </span>
+                      <span className="map-search-result-name">{r.label}</span>
+                      {r.sublabel && <span className="map-search-result-topic">{r.sublabel}</span>}
                     </button>
                   </li>
                 ))
@@ -818,14 +1056,13 @@ export default function UnderstandingMapView({
         </div>
       </div>
 
-      {/* TopicはルートTopicだけをクリック可能なボタンとして並べる（子Topicまで並べると
-          数が増えすぎるため、絞り込みはMap上のクラスタラベルクリックでも代替できる）。
-          最初は5個までにとどめ、「もっと表示する」で全件表示に切り替える。 */}
+      {/* TopicはルートTopicだけをクリック可能なボタンとして並べる。選択するとそのTopicの
+          subtree（子孫Topic・配下Concept・Knowledge）だけをMapに表示する。 */}
       <div className="map-topic-filter-bar">
         <button
           type="button"
           className={selectedTopicId === null ? "map-topic-chip active" : "map-topic-chip"}
-          onClick={() => handleSelectTopic(null)}
+          onClick={() => handleSelectTopicFilter(null)}
         >
           すべて
         </button>
@@ -834,7 +1071,7 @@ export default function UnderstandingMapView({
             key={t.id}
             type="button"
             className={selectedTopicId === t.id ? "map-topic-chip active" : "map-topic-chip"}
-            onClick={() => handleSelectTopic(t.id)}
+            onClick={() => handleSelectTopicFilter(t.id)}
           >
             {t.name}
           </button>
@@ -862,20 +1099,14 @@ export default function UnderstandingMapView({
             onInit={(instance) => {
               reactFlowInstanceRef.current = instance;
             }}
-            onNodeMouseEnter={(_, node) => {
-              // TopicのクラスタラベルはConceptRelationのedgeを持たないため、hoverしても
-              // 「隣接なし」＝Conceptが全部薄くなる、という意図しない見た目になる。
-              // 隣接強調の対象はConcept nodeのhoverだけにする。
-              if (node.type === "concept") setHoveredNodeId(node.id);
-            }}
+            onNodeMouseEnter={(_, node) => setHoveredNodeId(node.id)}
             onNodeMouseLeave={() => setHoveredNodeId(null)}
             onNodeClick={(_, node) => {
-              if (node.type === "concept") handleSelectConcept(node.id);
-              else if (node.type === "topic") {
-                const clusterKey = node.id.startsWith(CLUSTER_LABEL_PREFIX)
-                  ? node.id.slice(CLUSTER_LABEL_PREFIX.length)
-                  : node.id;
-                handleSelectTopic(clusterKey === UNCLASSIFIED_CLUSTER ? null : clusterKey);
+              const kind = node.type as MapNodeKind | undefined;
+              if (kind === "concept") handleSelectNode({ kind: "concept", id: node.id });
+              else if (kind === "knowledge") handleSelectNode({ kind: "knowledge", id: node.id });
+              else if (kind === "rootTopic" || kind === "subtopic" || node.type === "topic") {
+                handleSelectNode({ kind: "topic", id: node.id });
               }
             }}
             fitView
@@ -889,7 +1120,7 @@ export default function UnderstandingMapView({
           >
             <Background />
             <Controls showInteractive={false} />
-            {visibleConcepts.length >= MINIMAP_THRESHOLD && <MiniMap pannable zoomable />}
+            {nodes.length >= MINIMAP_THRESHOLD && <MiniMap pannable zoomable />}
           </ReactFlow>
         </div>
 
@@ -902,9 +1133,7 @@ export default function UnderstandingMapView({
         />
         <div
           className={
-            selectedConcept && mobileDetailOpen
-              ? "concept-detail-panel-wrapper map-mobile-open"
-              : "concept-detail-panel-wrapper"
+            hasSelection && mobileDetailOpen ? "concept-detail-panel-wrapper map-mobile-open" : "concept-detail-panel-wrapper"
           }
         >
           {selectedConcept ? (
@@ -915,11 +1144,29 @@ export default function UnderstandingMapView({
               relations={relations}
               knowledgeItems={selectedConceptKnowledge}
               onClose={handleCloseDetail}
-              onSelectConcept={focusConcept}
+              onSelectConcept={(id) => focusNode({ kind: "concept", id })}
+              onSelectKnowledge={(id) => focusNode({ kind: "knowledge", id })}
+            />
+          ) : selectedTopic ? (
+            <TopicDetailPanel
+              topic={selectedTopic}
+              topics={topics}
+              concepts={activeConcepts}
+              onClose={handleCloseDetail}
+              onSelectConcept={(id) => focusNode({ kind: "concept", id })}
+              onSelectTopic={(id) => focusNode({ kind: "topic", id })}
+            />
+          ) : selectedKnowledge ? (
+            <KnowledgeDetailPanel
+              item={selectedKnowledge}
+              concepts={activeConcepts}
+              topics={topics}
+              onClose={handleCloseDetail}
+              onSelectConcept={(id) => focusNode({ kind: "concept", id })}
             />
           ) : (
             <div className="concept-detail-placeholder">
-              <p>Conceptを選択すると、ここに詳細が表示されます。</p>
+              <p>Topic / Concept / Knowledgeを選択すると、ここに詳細が表示されます。</p>
             </div>
           )}
         </div>
