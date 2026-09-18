@@ -503,7 +503,7 @@ export default function App() {
   const shortSummary = analysis ? firstSentences(analysis.summary, 3) : "";
 
   return (
-    <div className="page">
+    <div className={view === "understanding" ? "page page-wide" : "page"}>
       <h1 className="brand">
         <img className="brand-icon" src="/assets/frames/mole-icon.png" alt="" aria-hidden="true" />
         Digger

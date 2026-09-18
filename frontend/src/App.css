@@ -642,43 +642,300 @@
   overflow: hidden;
 }
 
-.map-growth-stats {
-  margin: 0 0 0.6rem;
+/* 「自分の理解」ページを開いているときだけ、Map用の3ペインレイアウトが収まるよう
+   コンテナを広げる（他の画面は既存の640pxの会話中心レイアウトのまま）。 */
+.page-wide {
+  max-width: 1100px;
+}
+
+.understanding-view-map {
+  max-width: none;
+}
+
+.map-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.map-summary-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.map-summary-stats strong {
+  color: #1a1a1a;
+  font-size: 0.95rem;
+}
+
+.map-summary-recent {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #777;
+}
+
+.map-refresh-button {
+  margin-left: auto;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.78rem;
+  color: #333;
+  cursor: pointer;
+}
+
+.map-refresh-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.map-small-state-hint {
+  margin-top: 0.75rem;
+  font-size: 0.82rem;
+  color: #666;
+}
+
+.understanding-map-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: stretch;
+  position: relative;
+}
+
+.map-mobile-nav-toggle {
+  display: none;
+}
+
+.map-topic-nav {
+  width: 190px;
+  flex-shrink: 0;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  padding: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.map-topic-nav-header {
+  display: none;
+}
+
+.map-topic-nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: #333;
+  cursor: pointer;
+}
+
+.map-topic-nav-item.active {
+  background: #1a1a1a;
+  color: #fff;
+}
+
+.map-topic-nav-tree {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+}
+
+.map-topic-nav-children {
+  padding-left: 0.75rem;
+  border-left: 1px solid #eee;
+  margin-left: 0.4rem;
+}
+
+.concept-map {
+  flex: 1 1 0%;
+  width: auto;
+  height: 560px;
+}
+
+.concept-node-badge {
+  display: inline-block;
+  margin-right: 0.3rem;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  background: #2b6cb0;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.concept-detail-panel-wrapper {
+  width: 320px;
+  flex-shrink: 0;
+}
+
+.concept-detail-panel {
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  padding: 1rem;
+  height: 560px;
+  overflow-y: auto;
+}
+
+.concept-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.concept-detail-header h3 {
+  margin: 0;
+}
+
+.concept-detail-breadcrumb {
+  margin: 0.15rem 0 0.9rem;
+  font-size: 0.78rem;
+  color: #888;
+}
+
+.concept-detail-section-title {
+  margin: 1rem 0 0.4rem;
   font-size: 0.82rem;
   color: #555;
 }
 
-.map-topic-filters {
+.concept-detail-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.concept-detail-knowledge-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.75rem;
+  flex-direction: column;
+  gap: 0.6rem;
 }
 
-.map-topic-chip {
-  display: inline-flex;
+.concept-detail-knowledge-statement {
+  margin: 0 0 0.25rem;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.concept-detail-knowledge-meta {
+  margin: 0;
+  display: flex;
+  gap: 0.5rem;
   align-items: center;
-  gap: 0.35rem;
-  background: #fff;
-  border: 1px solid #ddd;
-  border-radius: 999px;
-  padding: 0.25rem 0.65rem;
-  font-size: 0.78rem;
-  color: #444;
-  cursor: pointer;
+  font-size: 0.75rem;
+  color: #888;
 }
 
-.map-topic-chip.active {
-  background: #1a1a1a;
-  border-color: #1a1a1a;
-  color: #fff;
+.concept-detail-related-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
-.map-topic-chip-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
+.map-mobile-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .understanding-map-layout {
+    flex-direction: column;
+  }
+
+  .map-mobile-nav-toggle {
+    display: inline-block;
+    align-self: flex-start;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 999px;
+    padding: 0.3rem 0.75rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .map-topic-nav {
+    display: none;
+  }
+
+  .map-topic-nav.map-topic-nav-mobile-open {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 240px;
+    z-index: 20;
+    border-radius: 0;
+    overflow-y: auto;
+  }
+
+  .map-topic-nav-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+    font-weight: 700;
+  }
+
+  .map-mobile-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 15;
+  }
+
+  .map-mobile-backdrop-hidden {
+    display: none;
+  }
+
+  .concept-map {
+    /* .understanding-map-layoutがcolumn方向のflexになるため、baseの`flex: 1 1 0%`の
+       flex-basis（column方向では高さの基準になる）がheightより優先されてしまい、
+       0pxに潰れてしまう。ここでflexをリセットしてheightを効かせる。 */
+    flex: none;
+    width: 100%;
+    height: 420px;
+  }
+
+  .concept-detail-panel-wrapper {
+    display: none;
+  }
+
+  .concept-detail-panel-wrapper.map-mobile-open {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    z-index: 20;
+    max-height: 70vh;
+  }
+
+  .concept-detail-panel-wrapper.map-mobile-open .concept-detail-panel {
+    height: auto;
+    max-height: 70vh;
+    border-radius: 14px 14px 0 0;
+  }
 }
 
 /* Knowledge詳細モーダル */

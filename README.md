@@ -141,7 +141,7 @@ Content-Type: application/json
 
 - **最近タブ**: 保存済みKnowledgeを`createdAt`の新しい順に「今日」「昨日」などの日付でグルーピングして表示します。各カードをクリックすると、概念・説明・理解した日・状態・元の記事・関連する理解をモーダルで確認できます（既存のKnowledgeスキーマにあるデータのみを表示し、新しいデータは作っていません）。
 - **トピックタブ**: 各Knowledgeが持つ`topicPath`（最大3階層のトピックの配列、例: `["経済", "金融政策", "政策金利"]`）をもとに、テーマ別の階層ツリーとして表示します。`topicPath`が未付与のKnowledgeは`GET /api/knowledge`が呼ばれたタイミングでバックエンドがまとめてLLM（Vertex AI Gemini。詳細は[`backend/README.md`](backend/README.md)を参照）に分類させ、以後はDBに保存された値を使い回します（毎回全件を送り直すことはありません）。
-- **マップタブ**: Knowledge同士の関係（`extends`＝深掘り、`supersedes`＝更新）をノードと辺のグラフとして表示します（[reactflow](https://reactflow.dev/)を使用）。単なる可視化のデモに見えないよう、トピック（`topicPath`の1階層目）ごとにノードを近くにまとめて配置し、色分け・トピックでの絞り込み・トピックビューからの「この分野をマップで見る」導線・「今週N件の理解が増えました」のような小さな成長指標を添えています。ノードをドラッグしたり、ズーム・パンしたりでき、ノードをクリックすると最近タブと同じ詳細モーダルが開きます。位置の保存や物理シミュレーションによる自動レイアウトなど高度な機能は今回のスコープ外です。
+- **マップタブ**: 「保存したKnowledgeを並べたグラフ」ではなく「今のユーザーの理解状態」を表すことを目指し、Topic/Concept/ConceptRelationモデル（後述）ベースの3ペインUI（左: Topic Navigation／中央: Concept Map／右: Concept詳細）で構成しています（[reactflow](https://reactflow.dev/)を使用）。中央のMapはConceptをnode、ConceptRelationをedgeとして表示し、Knowledge本文はnode化しません。同じTopicに属するConceptは近くにまとまって配置され、Topicでの絞り込み・「今週N件の理解が増えました」のような成長指標・直近追加されたConceptのNEWバッジを添えています。ノードをドラッグ・クリックでき、クリックすると右側にそのConceptの詳細（紐づくKnowledge一覧・関連Concept・出典）が表示されます。モバイルではTopic Navがドロワー、Concept詳細が下からのシートになります。「最近」「トピック」タブは引き続き旧`Knowledge.topicPath`モデルのまま無変更です（詳細は[`backend/README.md`](backend/README.md#topic--concept--conceptrelationモデルtopicts--conceptts--conceptrelationts--understandingstructurets)を参照）。
 - **状態による見え方**: `status: outdated`のKnowledgeはマップに表示せず、`merged`/`outdated`は一覧上で少し薄く表示します（詳細はモーダルから確認可能）。
 - Knowledgeが0件のときは、通常のからっぽな管理画面のようにならないよう、モールのキャラクターと「まだ理解マップは小さいです。気になる記事を掘ると、ここにあなたの理解が少しずつ育っていきます。」という案内文、「記事を掘る」ボタンを表示します。
 
@@ -255,6 +255,6 @@ npm run dev
 - **`active`→`foundational`への自動昇格**（「十分理解された」Knowledgeを暗黙の前提として扱う仕組み。`status`フィールド自体は用意済み）
 - 認証・ユーザーごとのデータ分離（現状はすべてのKnowledgeが固定ユーザーに紐づくMVP実装）
 
-「Knowledge Map = ユーザーの現時点の理解状態」を表現するためのデータモデルの土台として、Topic（俯瞰用の粗い分類）・Concept（具体的な理解対象）・ConceptRelation（Concept間のつながり）を、既存のKnowledge（`concept`文字列・`topicPath`）とは独立に並存する形で追加しました（`backend/src/topic.ts` / `concept.ts` / `conceptRelation.ts` / `understandingStructure.ts`、新設`GET /api/understanding-map`。詳細は[`backend/README.md`](backend/README.md#topic--concept--conceptrelationモデルtopicts--conceptts--conceptrelationts--understandingstructurets)を参照）。今回はデータモデルと最低限の動作（Concept/Topicへのlazy migration、保存時のConceptRelation生成、Concept単位のTopic分類）のみで、Map UI自体の本格的な刷新は次回のPRで行います。
+「Knowledge Map = ユーザーの現時点の理解状態」を表現するためのデータモデルの土台として、Topic（俯瞰用の粗い分類）・Concept（具体的な理解対象）・ConceptRelation（Concept間のつながり）を、既存のKnowledge（`concept`文字列・`topicPath`）とは独立に並存する形で追加し（`backend/src/topic.ts` / `concept.ts` / `conceptRelation.ts` / `understandingStructure.ts`、`GET /api/understanding-map` / `POST /api/understanding-map/refresh`）、その後「自分の理解」ページのマップタブをこの新モデルベースの3ペインUI（Topic Navigation／Concept Map／Concept詳細）に刷新しました（詳細は[`backend/README.md`](backend/README.md#topic--concept--conceptrelationモデルtopicts--conceptts--conceptrelationts--understandingstructurets)・[`frontend/README.md`](frontend/README.md)を参照）。「最近」「トピック」タブは引き続き旧`Knowledge.topicPath`モデルのまま無変更です。
 
 ニュースURLはあくまで最初の入力手段の一例であり、将来的には記事・動画・書籍・会話メモなど、さまざまな「興味の入口」を扱えるデータモデルにする想定です。設計は今後のイテレーションで詰めていきます。

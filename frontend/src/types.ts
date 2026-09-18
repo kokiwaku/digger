@@ -99,9 +99,52 @@ export type SavedKnowledge = {
   // 「自分の理解」ページのトピックビュー用。1〜3階層のパス。未分類の場合は省略される。
   topicPath?: string[];
   // 新しいTopic/Concept/Knowledgeモデル（backendのunderstandingStructure.ts）用のConcept参照。
-  // 今回のPRではUI側でまだ利用しない（既存のconcept文字列表示を変更しないため）が、
-  // 型としては先行して同期しておく。
   conceptIds?: string[];
   createdAt: string;
   updatedAt?: string;
+};
+
+// Topic/Concept/ConceptRelationモデル（backendのtopic.ts/concept.ts/conceptRelation.ts）。
+// マップタブ（UnderstandingMapView.tsx）で使用する。
+export type EntityStatus = "active" | "merged" | "archived";
+
+export type Topic = {
+  _id: string;
+  userId: string;
+  name: string;
+  parentId?: string | null;
+  status: EntityStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// backend側の`Concept`（Article Analysisの前提知識カード）とは別物のため、
+// frontend型としては名前を分けている。
+export type UnderstandingConcept = {
+  _id: string;
+  userId: string;
+  name: string;
+  topicIds: string[];
+  status: EntityStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConceptRelationType =
+  | "related"
+  | "prerequisite"
+  | "part_of"
+  | "causes"
+  | "contrasts"
+  | "extends"
+  | "supersedes";
+
+export type ConceptRelation = {
+  _id: string;
+  userId: string;
+  fromConceptId: string;
+  toConceptId: string;
+  type: ConceptRelationType;
+  createdAt: string;
+  updatedAt: string;
 };
