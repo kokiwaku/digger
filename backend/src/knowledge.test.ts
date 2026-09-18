@@ -176,3 +176,36 @@ test("knowledgeDocumentSchema still accepts a legacy document without relationsO
   assert.equal(parsed.relationsOut, undefined);
   assert.equal(parsed.topicPath, undefined);
 });
+
+test("knowledgeDocumentSchema accepts a legacy document without conceptIds (backward compatibility)", () => {
+  const legacyDoc = {
+    userId: "local-user",
+    concept: "MI6",
+    statement: "MI6は1909年に設立された",
+    evidence: "根拠",
+    confidence: "high" as const,
+    source: { type: "web_article" as const, url: "https://example.com", title: "記事" },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const parsed = knowledgeDocumentSchema.parse(legacyDoc);
+  assert.equal(parsed.conceptIds, undefined);
+});
+
+test("knowledgeDocumentSchema accepts a document with multiple conceptIds", () => {
+  const doc = {
+    userId: "local-user",
+    concept: "ハイブリッド戦争",
+    statement: "ハイブリッド戦争は軍事・非軍事の手段を組み合わせる",
+    evidence: "根拠",
+    confidence: "high" as const,
+    source: { type: "web_article" as const, url: "https://example.com", title: "記事" },
+    conceptIds: ["concept-1", "concept-2"],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const parsed = knowledgeDocumentSchema.parse(doc);
+  assert.deepEqual(parsed.conceptIds, ["concept-1", "concept-2"]);
+});

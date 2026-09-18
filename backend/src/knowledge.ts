@@ -52,6 +52,10 @@ export const knowledgeDocumentSchema = z.object({
   // 未分類の既存ドキュメントとの後方互換性のためoptional（getUserKnowledgeWithTopics()が
   // 一覧取得時に未分類分だけ遅延分類してこのフィールドを埋める）。
   topicPath: z.array(z.string()).min(1).max(3).optional(),
+  // Topic/Concept/Knowledgeモデル（understandingStructure.ts）用。concept文字列と併存し、
+  // Concept entityへの参照を持つ。既存ドキュメントとの後方互換性のためoptional
+  // （understandingStructure.tsのensureConceptsForKnowledge()が未設定分を遅延移行する）。
+  conceptIds: z.array(z.string()).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -244,4 +248,26 @@ export async function assignTopicsToUnclassified(userId: string = FIXED_USER_ID)
 export async function getUserKnowledgeWithTopics(userId: string = FIXED_USER_ID): Promise<KnowledgeDocument[]> {
   await assignTopicsToUnclassified(userId);
   return getUserKnowledge(userId);
+}
+
+// Topic/Concept/Knowledgeモデル（understandingStructure.ts）用のアクセサ。
+// Mongoコレクションへのアクセスはknowledge.ts内に閉じておくため、更新用の薄いsetterと
+// 単体取得用のgetterをここに用意する（understandingStructure.tsからknowledge.tsへの
+// 一方向の依存のみにして、循環importを避ける）。
+export async function getKnowledgeById(
+  knowledgeId: string,
+  userId: string = FIXED_USER_ID,
+): Promise<KnowledgeDocument | null> {
+  return getCollection().findOne({ _id: new ObjectId(knowledgeId), userId });
+}
+
+export async function setKnowledgeConceptIds(
+  knowledgeId: string,
+  conceptIds: string[],
+  userId: string = FIXED_USER_ID,
+): Promise<void> {
+  await getCollection().updateOne(
+    { _id: new ObjectId(knowledgeId), userId },
+    { $set: { conceptIds, updatedAt: new Date() } },
+  );
 }

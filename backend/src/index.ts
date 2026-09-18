@@ -12,6 +12,8 @@ import {
   parseSaveKnowledgeRequest,
   saveCandidatesAsKnowledge,
   fetchUserKnowledge,
+  fetchUnderstandingMap,
+  refreshAndFetchUnderstandingMap,
 } from "./knowledgeApi.js";
 import { LlmProviderError, toSafeApiResponse } from "./llm/provider/llmProviderError.js";
 import type { DigRequest } from "./types.js";
@@ -185,6 +187,34 @@ app.get("/api/knowledge", async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "知識の取得に失敗しました";
     console.error("[api/knowledge] error", { message });
+    return c.json({ error: message }, 502);
+  }
+});
+
+// Topic/Concept/Knowledgeモデル（understandingStructure.ts）用。既存のGET /api/knowledgeとは
+// 独立した新しいエンドポイントで、現在のTopic階層・Concept・ConceptRelationを返す。
+// 読み取り専用（lazy migrationやLLM呼び出しは行わない。それらはPOST /refresh側の責務）。
+app.get("/api/understanding-map", async (c) => {
+  try {
+    const map = await fetchUnderstandingMap();
+    return c.json(map);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "理解構造の取得に失敗しました";
+    console.error("[api/understanding-map] error", { message });
+    return c.json({ error: message }, 502);
+  }
+});
+
+// 未移行のKnowledgeのConcept化と、未分類のConceptのTopic分類（LLM呼び出しを伴う、
+// 相対的に重い処理）を明示的に実行する。GET /api/understanding-mapを「開くだけ」で
+// この重い処理が走らないよう、副作用を伴う操作は別エンドポイントに分離している。
+app.post("/api/understanding-map/refresh", async (c) => {
+  try {
+    const map = await refreshAndFetchUnderstandingMap();
+    return c.json(map);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "理解構造の更新に失敗しました";
+    console.error("[api/understanding-map/refresh] error", { message });
     return c.json({ error: message }, 502);
   }
 });

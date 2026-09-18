@@ -10,12 +10,18 @@ import {
 } from "./llm/knowledgeExtraction.js";
 import { getKnowledgeExtractionService } from "./llm/knowledgeExtractionFactory.js";
 import {
+  FIXED_USER_ID,
   getUserKnowledge,
   getUserKnowledgeWithTopics,
   saveMultipleKnowledge,
   toUserKnowledge,
   type SaveKnowledgeInput,
 } from "./knowledge.js";
+import {
+  getUnderstandingMap,
+  linkConceptsForSavedKnowledge,
+  refreshUnderstandingMap,
+} from "./understandingStructure.js";
 import type { UserKnowledge } from "./llm/personalizedAnalysis.js";
 
 export const extractKnowledgeRequestSchema = z.object({
@@ -148,6 +154,17 @@ export async function saveCandidatesAsKnowledge(request: SaveKnowledgeRequest) {
   }));
 
   const { saved, skipped } = await saveMultipleKnowledge(saveInputs);
+
+  // Topic/Concept/Knowledgeモデル（understandingStructure.ts）への「軽量更新」。
+  // Concept作成・紐付け・ConceptRelation生成はDB書き込みのみで完結する軽い処理のため、
+  // ここで同期的に行う（LLMによるTopic分類は行わない。それはGET /api/understanding-map
+  // 側の「深い再構成」に委ねる）。失敗してもKnowledge本体の保存結果には影響させない。
+  try {
+    await linkConceptsForSavedKnowledge(FIXED_USER_ID, saved);
+  } catch (err) {
+    console.error("[knowledge/save] failed to link concepts/relations, continuing", err);
+  }
+
   return {
     savedCount: saved.length,
     skippedCount: skipped.length,
@@ -158,4 +175,18 @@ export async function saveCandidatesAsKnowledge(request: SaveKnowledgeRequest) {
 // 一覧取得時にまとめて1回だけtopicPathを遅延分類してから返す。
 export async function fetchUserKnowledge() {
   return getUserKnowledgeWithTopics();
+}
+
+// GET /api/understanding-map用。既存のGET /api/knowledgeとは別に、新しい
+// Topic/Concept/ConceptRelationモデルを返す。読み取り専用で、lazy migrationや
+// LLMによるTopic分類などの副作用は一切行わない（副作用はrefreshUnderstandingMap参照）。
+export async function fetchUnderstandingMap() {
+  return getUnderstandingMap();
+}
+
+// POST /api/understanding-map/refresh用。未移行のKnowledgeのConceptへの変換と、
+// 未分類のConceptのTopic分類（LLM呼び出しを伴う）を明示的に実行してから、
+// 更新後のTopic/Concept/ConceptRelationを返す。
+export async function refreshAndFetchUnderstandingMap() {
+  return refreshUnderstandingMap();
 }

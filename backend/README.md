@@ -12,10 +12,18 @@ backend/
 │   ├── dig.ts                         # /api/dig のURLバリデーションと解析結果の組み立て
 │   ├── deepDive.ts                     # /api/deep-dive のリクエスト検証と回答の組み立て
 │   ├── deepDive.test.ts                 # deepDive.ts のユニットテスト（mock providerでの/api/deep-dive相当のフルパス確認）
-│   ├── knowledgeApi.ts                   # /api/knowledge/extract・/api/knowledge/save・/api/knowledge のリクエスト検証と組み立て
+│   ├── knowledgeApi.ts                   # /api/knowledge/extract・/api/knowledge/save・/api/knowledge・/api/understanding-map のリクエスト検証と組み立て
 │   ├── knowledge.ts                       # Knowledge（保存済みの理解）のMongoDB永続化と重複判定
 │   ├── knowledge.test.ts                   # knowledge.ts のユニットテスト（正規化ロジックのみ、Mongo未使用）
 │   ├── knowledgeApi.test.ts                 # knowledgeApi.ts のユニットテスト（リクエスト検証・confidenceフィルタ、Mongo未使用）
+│   ├── topic.ts                              # Topic（俯瞰用の粗い分類）のMongoDB永続化と階層ロジック（userIdごとに可変）
+│   ├── topic.test.ts                          # topic.ts のユニットテスト（深さ計算・循環検知等の純粋関数のみ、Mongo未使用）
+│   ├── concept.ts                              # Concept（具体的な理解対象）のMongoDB永続化
+│   ├── concept.test.ts                          # concept.ts のユニットテスト（名前正規化・schemaのみ、Mongo未使用）
+│   ├── conceptRelation.ts                        # ConceptRelation（Concept間のedge）のMongoDB永続化
+│   ├── conceptRelation.test.ts                    # conceptRelation.ts のユニットテスト（self-relation・重複判定等、Mongo未使用）
+│   ├── understandingStructure.ts                   # KnowledgeとTopic/Conceptを橋渡しするオーケストレーション層（GET /api/understanding-mapの実体）
+│   ├── understandingStructure.test.ts               # understandingStructure.ts のユニットテスト（relation type変換のみ、Mongo未使用）
 │   ├── llmTest.ts                       # /api/llm/test（開発用のLLM疎通確認API）のロジック
 │   ├── articleFetcher.ts                 # 記事HTMLの取得（リダイレクト追跡）とReadabilityによる本文/タイトル抽出
 │   ├── network.ts                         # SSRF対策（private/loopback/link-localホストの拒否）
@@ -154,6 +162,8 @@ flowchart TD
   - `POST /api/knowledge/extract` — `{ source, articleAnalysis, conversationHistory }` を受け取り、schemaバリデーション失敗は `400`。保存済みKnowledge（あれば）を`existingKnowledge`としてLLMへ渡した上でKnowledge Extractionを実行し、`200` で `{ candidates: KnowledgeCandidate[] }`（`confidence: "low"`の候補はUXをシンプルに保つため事前に除外）。LLMプロバイダー側のエラーは原因に応じて`500`/`502`/`504`、それ以外の失敗は`502`で`{ error: string }`
   - `POST /api/knowledge/save` — `{ source, candidates: KnowledgeCandidate[] }`（ユーザーがチェックボックスで選んだ候補のみ）を受け取り、schemaバリデーション失敗は`400`。既存Knowledgeと（concept完全一致 + statement正規化後一致で）重複するものは保存せずスキップし、`200`で`{ savedCount: number, skippedCount: number }`、それ以外の失敗は`502`で`{ error: string }`
   - `GET /api/knowledge` — 保存済みKnowledge（固定userId分）を`createdAt`降順で`200`の`{ knowledge: KnowledgeDocument[] }`として返す。取得失敗時は`502`で`{ error: string }`
+  - `GET /api/understanding-map` — Topic/Concept/ConceptRelationモデル（[後述](#topic--concept--conceptrelationモデルtopicts--conceptts--conceptrelationts--understandingstructurets)）の**現在DBにある状態をそのまま**`200`で`{ topics: TopicDocument[], concepts: ConceptDocument[], relations: ConceptRelationDocument[] }`として返す、読み取り専用のエンドポイント。lazy migrationやLLM呼び出しなどの副作用は一切行わない。取得失敗時は`502`で`{ error: string }`
+  - `POST /api/understanding-map/refresh` — 未移行のKnowledgeをConceptへ変換し、未分類のConceptをLLMでTopicへ分類してから、更新後の`{ topics, concepts, relations }`を`200`で返す。GETとは異なり明示的に重い処理（LLM呼び出しを含む）を実行するエンドポイント。取得失敗時は`502`で`{ error: string }`
   - `POST /api/llm/test` — 開発用のLLM疎通確認API（後述）。`{ message: string }` を受け取り、バリデーション失敗は `400`、成功すれば `200` で `{ response: string }`、LLMプロバイダー側のエラーは原因に応じて `500`/`502`/`504` で `{ error: string }`（安全な汎用メッセージのみ。詳細はサーバーログへ）
 
 ## LLM処理（Article Analysis / Personalized Analysis / Knowledge Extraction / Deep Dive）
@@ -290,6 +300,22 @@ frontendの「自分の理解」ページ（最近／トピック／マップの
 - **分類のタイミング（毎回全KnowledgeをLLMへ送らない）**: `knowledge.ts`の`assignTopicsToUnclassified()`が、`topicPath`未設定のKnowledgeが1件でもあれば、それらだけをまとめて1回のLLM呼び出しで分類し、結果をDBへ書き戻します（既存の`topicPath`一覧も参考情報として渡し、同じテーマに毎回違う名前が付かないよう配慮）。一度分類されたKnowledgeは次回以降このLLM呼び出し自体が発生しません。`GET /api/knowledge`（`knowledgeApi.ts`の`fetchUserKnowledge()`）は`getUserKnowledgeWithTopics()`を呼ぶことで、一覧取得のたびに未分類分だけを遅延分類してから返します。分類に失敗しても例外を投げず、該当Knowledgeは「未分類」のまま一覧取得自体は継続します。
 - **マップビューの辺（`relationsOut`）**: 既存の`relatedKnowledgeIds`（idのみの配列）に加えて、`relationsOut: { knowledgeId, type: "extends" | "supersedes" }[]`を新設しました。`relatedKnowledgeIds`はこれまで書き込むだけで読み出す処理が無かったため、後方互換を保ったまま関係の種別も保持できるよう追加した形です（`knowledge.ts`の`buildRelationsOut()`。`new`/`reinforces`は対象Knowledgeを持たない、または保存自体されないため辺を作りません）。frontendはこの`relationsOut`をそのままReact Flowの辺として描画します。
 - **既存データとの後方互換性**: `topicPath`・`relationsOut`はどちらも`knowledgeDocumentSchema`でoptionalにしており、これらのフィールドが無い既存ドキュメントも問題なく読み書きできます（`knowledge.test.ts`で検証）。
+
+## Topic / Concept / ConceptRelationモデル（`topic.ts` / `concept.ts` / `conceptRelation.ts` / `understandingStructure.ts`）
+
+上記の`Knowledge.topicPath`は「KnowledgeにLLMが直接トピック文字列を付与するだけ」の単純な仕組みで、「自分の理解」ページの現行UIをそのまま動かし続けるために**今回は一切変更していません**。一方で、Diggerが目指す「Knowledge Map = ユーザーの現時点の理解状態」を表現するには、Topic（俯瞰用の粗い分類）・Concept（MI6や政策金利のような具体的な理解対象）・Knowledge（Conceptについての具体的な理解内容）を別のentityとして分離し、あとから構造を組み替えられるようにする必要があります。そのための土台として、既存の仕組みとは**独立に並存する**新しいモデルを追加しました。既存の`GET /api/knowledge`・「自分の理解」ページのUI・既存testへの影響はありません。
+
+- **Topic（`topic.ts`）**: ユーザーごとに持つ可変の俯瞰用分類。グローバル固定マスタにはしていません。`{ userId, name, parentId, status: active/merged/archived }`で、`parentId`により最大3階層（`MAX_TOPIC_DEPTH`）の親子関係を持てます。`setTopicParent()`は循環（`wouldCreateCycle()`）や深さ超過（`wouldExceedMaxDepth()`）になる変更を拒否し、`mergeTopics()`は子TopicのparentIdを付け替えたうえでsourceを`merged`にします（削除はしません）。`findOrCreateTopicPath(userId, path)`は、同じ`userId`・`parentId`・`name`の既存active Topicがあれば再利用し、無ければ作成します。
+- **Concept（`concept.ts`）**: 「MI6」「政策金利」のような具体的な理解対象。`{ userId, name, topicIds: string[], status }`で、1つのConceptが複数Topicに属せます（例:「ハイブリッド戦争」が「情報・インテリジェンス」と「安全保障」の両方に関連するケース）。`findOrCreateConcept(userId, name)`が、名前の正規化（trim+lowercase）で既存Conceptを再利用するか新規作成するかを判断する唯一の入口です。
+- **ConceptRelation（`conceptRelation.ts`）**: Map上のedgeを表現するConcept間の関係。typeは`related/prerequisite/part_of/causes/contrasts/extends`の6種類に絞っています。`createConceptRelation()`はself-relation（`isSelfRelation()`）と存在しないConceptへの関係を拒否し、同じ`from/to/type`の重複（`isDuplicateRelation()`）は新規作成せず既存のものを返します。
+- **KnowledgeとConceptの紐付け**: 既存の`concept: string`フィールドは変更せず、`conceptIds: string[]`を追加しました（1つのKnowledgeが複数Conceptに関係してもよい形ですが、現状の書き込みロジックは`concept`文字列1つにつきConcept 1件を紐付けるだけです）。
+- **保存時の「軽量更新」（`knowledgeApi.ts`の`saveCandidatesAsKnowledge()`）**: Knowledgeを新規保存した直後、`understandingStructure.ts`の`linkConceptsForSavedKnowledge()`が、`concept`文字列からConceptをfind-or-createして`conceptIds`をセットし、`relationsOut`（`extends`/`supersedes`）があればそれぞれ対応するConceptRelationを作成します。`supersedes`（既存の理解を置き換える）は`contrasts`（対比・対立）とは意味が異なるため、情報を失わないよう`ConceptRelationType`にも`supersedes`をそのまま残しています（`mapKnowledgeRelationTypeToConceptRelationType()`は恒等変換）。DB書き込みのみで完結する軽い処理なので、Knowledge保存と同じリクエスト内で同期的に行い、失敗してもtry/catchでKnowledge本体の保存結果には影響させません。
+- **読み取り（GET）と副作用の分離**: `GET /api/understanding-map`は「開いただけで重い処理が走る」ことを避けるため、DBの現在の状態をそのまま返すだけの純粋な読み取りにしています（`understandingStructure.ts`の`getUnderstandingMap()`）。lazy migrationとLLMによるTopic分類は`POST /api/understanding-map/refresh`（`refreshUnderstandingMap()`）に分離しており、これを明示的に呼んだときだけ実行されます。Conceptが増えるほどTopic分類のLLM呼び出しは重くなり（実測でも25件程度でVertex AIの30秒タイムアウトに達したことがあります）、それをGETの副作用にしてしまうと一覧を見るだけの操作が不安定になるため、書き込みを伴う処理は明示的なエンドポイントに切り出しています。
+- **既存Knowledgeのmigration**: 専用のmigrationスクリプトは作らず、`topicPath`の遅延分類と同じ「lazy migration」パターンを踏襲しています。`understandingStructure.ts`の`ensureConceptsForKnowledge()`が、`POST /api/understanding-map/refresh`が呼ばれるたびに、`conceptIds`未設定のKnowledgeをConceptへ変換し、`relationsOut`を持つKnowledge（新規保存時の同期を経ていない既存データを含む）についてもConceptRelationを同期します（`isDuplicateRelation`のおかげで何度呼んでも重複しません）。
+- **Concept単位のTopic分類（「深い再構成」に相当）**: `topicIds`が空のConceptをまとめて分類する`assignTopicsToUnclassifiedConcepts()`も、Knowledge保存時やGETのタイミングではなく`POST /api/understanding-map/refresh`が呼ばれたときにだけ遅延実行します。LLM呼び出しは既存の`llm/knowledgeTopic.*`（interface/mock/vertex/factory）をそのまま共用しており、Knowledge向けの`assignTopicsToUnclassified()`とConcept向けの`assignTopicsToUnclassifiedConcepts()`の両方から同じprompt/serviceを呼び出します（呼び出し側と永続化先が異なるだけです）。
+- **Topic分類promptの方針強化**: `knowledgeTopic.vertex.ts`のprompt文言に、「新しいTopicを増やすこと自体を目的にしない」「一般的に正しい分類ではなく、このユーザーの現時点の理解を俯瞰しやすくすることが目的」「将来Topic構造が再編される前提で、今の情報から無理なく導ける分類を答える」という方針を明示的に追加しました。分類対象がKnowledge由来（既存）でもConcept由来（新規）でも同じprompt文言で扱えるよう、文言も「Knowledge」から「項目（KnowledgeまたはConcept）」という表現に一般化しています。
+- **`GET /api/understanding-map` / `POST /api/understanding-map/refresh`（新設）**: 前者は`getUnderstandingMap()`（純粋な読み取り）、後者は`refreshUnderstandingMap()`（`ensureConceptsForKnowledge()`→`assignTopicsToUnclassifiedConcepts()`を実行してから読み取り）を呼びます。既存の`GET /api/knowledge`はKnowledge detail取得用として残しており、frontendは`Knowledge.conceptIds`経由で両者を突き合わせられます（今回のPRではfrontend側はこのAPIをまだ利用しません。次回のMap UI刷新PRで本格的に使う想定）。
+- **今回UIは変更していません**: `frontend/src/types.ts`の`SavedKnowledge`に`conceptIds?: string[]`という型だけ先行して追加していますが、`UnderstandingPage.tsx`の表示ロジックは一切変更していません。
 
 ## LLMプロバイダー層（`llm/provider/`）
 
@@ -496,3 +522,8 @@ curl -X POST http://localhost:8787/api/llm/test \
 - エラーハンドリングの共通化（現状は各ルートでtry/catch）
 - frontend/backend間で重複しているリクエスト/レスポンス型の共有化
 - `robots.ts`のパーサはAllow/Disallowのみ対応。ワイルドカード（`*`, `$`）や`Crawl-delay`など、より厳密なrobots.txt仕様への対応
+- **`UnderstandingStructureService`への発展**: 現状の`understandingStructure.ts`は「lazy migration + lazy classification」のみ。将来的にはTopic統合・分割・parent変更・ConceptのTopic間移動・merged/archived判定を提案/実行するserviceへ発展させる余地がある
+- **Map/Topic再構成の更新頻度の階層化**: 現状は「Knowledge保存直後の軽量更新（Concept紐付け・ConceptRelation生成、DB書き込みのみ）」と「`POST /api/understanding-map/refresh`呼び出し時の深い再構成（LLMによるConceptのTopic分類）」の2段階のみで、後者はfrontendから明示的に呼ぶ必要があります（自動では走りません）。将来的には「1日1回の自動的な通常再構成」「定期的なより深い再構成」といった中間層や、schedulerからの自動呼び出しを追加する余地がある（scheduler自体は今回未実装）
+- **理解構造の変更履歴**: 現状はTopic/Concept/ConceptRelationの「現在の状態」のみを保持しており、変更履歴は残らない。将来「1か月前の理解マップ」と「現在の理解マップ」を比較する機能を作る場合、`TopicRelationHistory`のような変更履歴コレクションの追加を検討する
+- Topic/ConceptのMongoDBインデックス定義（`user_topics`の`{ userId, parentId, name }`、`user_concepts`の`{ userId, name }`など。現状は件数が少ない前提でインデックス未設定）
+- 手動でのTopic/Concept編集UI（統合・parent変更・archiveのAPI自体は用意したが、UIからの操作導線は未実装）
