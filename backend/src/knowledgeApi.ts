@@ -9,7 +9,13 @@ import {
   type KnowledgeExtractionResult,
 } from "./llm/knowledgeExtraction.js";
 import { getKnowledgeExtractionService } from "./llm/knowledgeExtractionFactory.js";
-import { getUserKnowledge, saveMultipleKnowledge, toUserKnowledge, type SaveKnowledgeInput } from "./knowledge.js";
+import {
+  getUserKnowledge,
+  getUserKnowledgeWithTopics,
+  saveMultipleKnowledge,
+  toUserKnowledge,
+  type SaveKnowledgeInput,
+} from "./knowledge.js";
 import type { UserKnowledge } from "./llm/personalizedAnalysis.js";
 
 export const extractKnowledgeRequestSchema = z.object({
@@ -148,6 +154,8 @@ export async function saveCandidatesAsKnowledge(request: SaveKnowledgeRequest) {
   };
 }
 
+// 「自分の理解」ページ（GET /api/knowledge）用。未分類のKnowledgeがあれば、
+// 一覧取得時にまとめて1回だけtopicPathを遅延分類してから返す。
 export async function fetchUserKnowledge() {
-  return getUserKnowledge();
+  return getUserKnowledgeWithTopics();
 }

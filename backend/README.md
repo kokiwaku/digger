@@ -51,6 +51,12 @@ backend/
 │       ├── deepDiveFactory.test.ts                                     # 上記のユニットテスト
 │       ├── knowledgeRetrieval.ts                                        # Relevant Knowledge Retrieval（Deep Diveへ渡すKnowledgeの絞り込み）
 │       ├── knowledgeRetrieval.test.ts                                    # 上記のユニットテスト（フェイクのLlmProviderを使用、ネットワーク未使用）
+│       ├── knowledgeTopic.ts                                              # 型・zod schema・KnowledgeTopicService interface（「自分の理解」ページのトピック分類）
+│       ├── knowledgeTopic.mock.ts                                          # モック実装（conceptをそのまま単一階層のtopicにする）
+│       ├── knowledgeTopic.mock.test.ts                                      # モック実装のユニットテスト
+│       ├── knowledgeTopic.vertex.ts                                          # 実LLM実装（Gemini呼び出し＋prompt生成＋schema検証＋1回だけ再試行）
+│       ├── knowledgeTopic.vertex.test.ts                                      # 上記のユニットテスト（フェイクのLlmProviderを使用、ネットワーク未使用）
+│       ├── knowledgeTopicFactory.ts                                            # LLM_PROVIDER環境変数によるKnowledgeTopicService切り替え
 │       ├── jsonExtraction.ts                                            # 実LLM実装間で共有するJSON抽出ヘルパー（markdownコードフェンス対応）
 │       └── provider/                                                 # LLMプロバイダー抽象化層（Vertex AI/Geminiなど）
 │           ├── llmProvider.ts                                          # LlmProvider interface（generateTextのみ）
@@ -256,7 +262,7 @@ Diggerのゴールは「Knowledgeを増やすこと」ではなく「ユーザ�
 Deep Dive会話から抽出された候補（`KnowledgeCandidate`）のうち、**ユーザーが確認して選択したものだけ**をMongoDBへ永続化します。「AIが勝手に理解を確定・保存しない」という方針を、抽出（LLM）と保存（ユーザー操作起点のAPI呼び出し）を別のリクエストに分けることで担保しています。
 
 - **認証は未実装（MVP）**: すべてのKnowledgeは固定の`userId: "local-user"`（`knowledge.ts`の`FIXED_USER_ID`）に紐づきます。複数ユーザーの分離は将来の認証実装時に対応します。
-- **コレクション**: `user_knowledge`（DBは`MONGODB_DB_NAME`環境変数、既定`digger`）。ドキュメント形は`{ _id, userId, concept, statement, evidence, confidence, status, source: { type, url, title }, relatedKnowledgeIds?, createdAt, updatedAt }`。`status`と`relatedKnowledgeIds`はどちらも`optional`のzod schemaにしており、既存ドキュメント（この2フィールドが無い）もそのまま`knowledgeDocumentSchema.parse()`に通ります。MVPのため、インデックス定義やスキーマバリデーション（MongoDB側の`$jsonSchema`等）は行わず、アプリケーション側のzod schemaでのみ形を保証しています。
+- **コレクション**: `user_knowledge`（DBは`MONGODB_DB_NAME`環境変数、既定`digger`）。ドキュメント形は`{ _id, userId, concept, statement, evidence, confidence, status, source: { type, url, title }, relatedKnowledgeIds?, relationsOut?, topicPath?, createdAt, updatedAt }`。`status`/`relatedKnowledgeIds`/`relationsOut`/`topicPath`はすべて`optional`のzod schemaにしており、これらが無い既存ドキュメントもそのまま`knowledgeDocumentSchema.parse()`に通ります（`relationsOut`/`topicPath`は「自分の理解」ページ用に今回追加。詳細は後述）。MVPのため、インデックス定義やスキーマバリデーション（MongoDB側の`$jsonSchema`等）は行わず、アプリケーション側のzod schemaでのみ形を保証しています。
 - **重複判定・関係に基づく保存の扱い**: `saveMultipleKnowledge()`は各candidateについて上から順に次を評価します。①`relationToExisting.type === "reinforces"`なら無条件にスキップ（`shouldSkipAsReinforcement()`）。②同じ`userId`+`concept`完全一致のドキュメントの中に、`statement`を正規化（`normalizeForDedup()`）した上で完全一致するものがあればスキップ（`isDuplicateKnowledge()`）。③どちらにも該当しなければ（`new`/`extends`/`supersedes`はここに来る）、`status: "active"`の新しいドキュメントとして保存し、`relationToExisting.knowledgeId`があれば`relatedKnowledgeIds`にそのidを記録します（`buildRelatedKnowledgeIds()`）。**`supersedes`の場合でも、今回は参照元の既存Knowledgeを自動で`outdated`へ変更しません**（次のステップの設計課題）。スキップされた件数は`POST /api/knowledge/save`のレスポンス（`skippedCount`）でフロントエンドに伝わり、「N件は既に保存済みのためスキップしました」という控えめなフィードバックに使われます。
 - **`knowledgeApi.ts`**: `POST /api/knowledge/extract`と`POST /api/knowledge/save`のリクエスト検証（zod）・組み立てロジック。`extractKnowledgeRequestSchema`は`articleAnalysisSchema`（`llm/articleAnalysis.ts`）をそのまま使ってバリデーションするため、`articleAnalysis`の形が不正なリクエストは`400`になります。`saveKnowledgeRequestSchema`は`knowledgeCandidateSchema`（`id`・`relationToExisting?`を含む）をそのまま使うため、フロントエンドは`/api/knowledge/extract`のレスポンスに含まれる候補をそのまま（ユーザーが選んだものだけ）送り返すだけで済みます。
 - **確認UI向けの変換（`knowledgeApi.ts`）**: DiggerはKnowledge Candidateを「保存する知識一覧」ではなく「今回の会話で理解がどう変化したか」として見せたいため、LLMの生の`relationToExisting`をそのままUIに渡さず、`/api/knowledge/extract`のレスポンス時点で変換しています。
@@ -274,6 +280,15 @@ Deep Dive会話から抽出された候補（`KnowledgeCandidate`）のうち、
 - **`hybridKnowledgeRetrievalService`**（2段目、`createHybridKnowledgeRetrievalService(getProvider)`）: まず`keywordKnowledgeRetrievalService`を試し、1件でもヒットすればそれをそのまま採用します（LLM呼び出しなし）。**キーワード一致が0件だった場合のみ**、Geminiに候補一覧（`[id] concept: statement`）・質問・記事要約を渡し、関連するidを選ばせる軽量なフォールバック呼び出しを1回だけ行います。これは「利上げ」⇔「政策金利」のような、キーワード一致だけでは拾えない言い換えを補うためです（実際に`LLM_PROVIDER=vertex`で検証し、キーワード一致だけでは拾えなかったこのケースをLLMフォールバックが正しく拾うことを確認しました）。この呼び出しは構造化出力＋zod検証は行いますが、**再試行はしません**（失敗時は例外を投げず空配列にフォールバックするだけで十分なため）。`getProvider`の遅延解決・注入は他の実LLM実装と同じパターンで、テストではフェイクの`LlmProvider`を注入しています。
 - **Deep Diveプロンプトへの反映**（`llm/deepDive.vertex.ts`）: 選定されたKnowledgeが1件以上ある場合のみ、「ユーザーが過去の会話で理解したと確認済みの内容」というセクションをプロンプトに追加します（0件なら**セクションごと省略**）。文面は「同じ内容を初歩から繰り返し説明する必要はない」「関連性が高い場合は自然につながりを示してよいが、毎回答で無理に言及する必要はない」という、言及を強制しないガイドとして書いており、`deepDive.vertex.test.ts`でこのガイド文言の有無・過去理解の内容がプロンプトに実際に含まれることをテストしています。
 - **将来Embedding/Vector Searchへ差し替える場合**: `KnowledgeRetrievalService`interfaceを実装する新しいファイルを追加し、`deepDive.ts`の`hybridKnowledgeRetrievalService`への依存を差し替えるだけで済む構造にしています。
+
+## 「自分の理解」ページとKnowledge Topic分類（`llm/knowledgeTopic.ts`）
+
+frontendの「自分の理解」ページ（最近／トピック／マップの3ビュー）は、既存の`GET /api/knowledge`をそのまま再利用しています。このAPIのためだけの大規模なbackend変更は行わず、追加したのは「トピックビュー用にKnowledgeへ`topicPath`を付与する」処理と、「マップビュー用に関係の種別（`extends`/`supersedes`）を保持する」フィールドだけです。
+
+- **トピック分類（`llm/knowledgeTopic.ts` / `.mock.ts` / `.vertex.ts` / `knowledgeTopicFactory.ts`）**: 正規化されたTopicコレクション（`KnowledgeTopic { id, name, parentId? }`のような形）は作らず、各Knowledgeドキュメントに`topicPath: string[]`（例:`["経済","金融政策","政策金利"]`、最大3階層）を直接持たせるだけの単純な構造にしました。理由は、現状のデータ量・要件では正規化されたコレクション（孤立ノードの掃除やid管理が必要になる）を導入するほどの複雑さが正当化できないためです。frontend側で`topicPath`が共通する接頭辞ごとにグルーピングして木構造を組み立てます（`UnderstandingPage.tsx`の`buildTopicTree()`）。
+- **分類のタイミング（毎回全KnowledgeをLLMへ送らない）**: `knowledge.ts`の`assignTopicsToUnclassified()`が、`topicPath`未設定のKnowledgeが1件でもあれば、それらだけをまとめて1回のLLM呼び出しで分類し、結果をDBへ書き戻します（既存の`topicPath`一覧も参考情報として渡し、同じテーマに毎回違う名前が付かないよう配慮）。一度分類されたKnowledgeは次回以降このLLM呼び出し自体が発生しません。`GET /api/knowledge`（`knowledgeApi.ts`の`fetchUserKnowledge()`）は`getUserKnowledgeWithTopics()`を呼ぶことで、一覧取得のたびに未分類分だけを遅延分類してから返します。分類に失敗しても例外を投げず、該当Knowledgeは「未分類」のまま一覧取得自体は継続します。
+- **マップビューの辺（`relationsOut`）**: 既存の`relatedKnowledgeIds`（idのみの配列）に加えて、`relationsOut: { knowledgeId, type: "extends" | "supersedes" }[]`を新設しました。`relatedKnowledgeIds`はこれまで書き込むだけで読み出す処理が無かったため、後方互換を保ったまま関係の種別も保持できるよう追加した形です（`knowledge.ts`の`buildRelationsOut()`。`new`/`reinforces`は対象Knowledgeを持たない、または保存自体されないため辺を作りません）。frontendはこの`relationsOut`をそのままReact Flowの辺として描画します。
+- **既存データとの後方互換性**: `topicPath`・`relationsOut`はどちらも`knowledgeDocumentSchema`でoptionalにしており、これらのフィールドが無い既存ドキュメントも問題なく読み書きできます（`knowledge.test.ts`で検証）。
 
 ## LLMプロバイダー層（`llm/provider/`）
 

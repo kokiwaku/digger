@@ -439,32 +439,287 @@
   font-size: 0.9rem;
 }
 
-/* 保存済みKnowledgeの確認用テスト表示。暫定実装のため、他のUIと視覚的にも
-   区別できるよう控えめな枠線・オレンジ系の色を使う。 */
-.knowledge-list-toggle {
-  margin-bottom: 1rem;
-}
-
-.knowledge-list-panel {
+/* ヘッダーの「掘る」/「自分の理解」ナビゲーション。大規模なNavigation設計は不要なため、
+   タブに近いシンプルな見た目にする。 */
+.main-nav {
+  display: flex;
+  gap: 1.25rem;
   margin-bottom: 1.5rem;
-  padding: 1rem;
-  border: 1px dashed #d97706;
-  border-radius: 10px;
-  background: #fffbeb;
-}
-
-.knowledge-list-item {
-  padding: 0.75rem 0;
   border-bottom: 1px solid #eee;
 }
 
-.knowledge-list-item:last-child {
-  border-bottom: none;
+.main-nav-link {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.5rem 0.1rem;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #888;
+  cursor: pointer;
 }
 
-.knowledge-list-meta {
-  margin: 0.3rem 0 0;
+.main-nav-link.active {
+  color: #1a1a1a;
+  border-bottom-color: #1a1a1a;
+}
+
+/* 「自分の理解」ページ全体。管理画面然とならないよう、余白を広めに取る。 */
+.understanding-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.understanding-title {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.understanding-tabs {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.understanding-tab {
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 999px;
+  padding: 0.4rem 1rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #666;
+  cursor: pointer;
+}
+
+.understanding-tab.active {
+  background: #1a1a1a;
+  border-color: #1a1a1a;
+  color: #fff;
+}
+
+.understanding-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* 「最近」ビュー */
+.understanding-date-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.understanding-date-label {
+  margin: 0;
   font-size: 0.8rem;
+  font-weight: 700;
   color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.understanding-item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.understanding-item-button {
+  width: 100%;
+  text-align: left;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.understanding-item-dimmed .understanding-item-button,
+.topic-item-button.understanding-item-dimmed {
+  opacity: 0.55;
+}
+
+.understanding-item-concept {
+  margin: 0;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.understanding-item-statement {
+  margin: 0.3rem 0 0;
+  font-size: 0.9rem;
+  color: #444;
+  line-height: 1.6;
+}
+
+.understanding-item-meta {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  color: #999;
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.understanding-item-status {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #eef4fb;
+  color: #2b6cb0;
+}
+
+/* 「トピック」ビュー */
+.topic-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.topic-node {
+  margin-bottom: 0.75rem;
+}
+
+.topic-node-name {
+  margin: 0 0 0.35rem;
+  font-weight: 700;
+  color: #333;
+}
+
+.topic-node-items {
+  list-style: none;
+  margin: 0 0 0.25rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.topic-item-button {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0.15rem 0;
+  font: inherit;
+  font-size: 0.9rem;
+  color: #2b6cb0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.topic-node-children {
+  padding-left: 1.25rem;
+  border-left: 1px solid #eee;
+}
+
+/* 「マップ」ビュー。ReactFlowは明示的な高さが無いと描画されないため固定する。 */
+.knowledge-map {
+  width: 100%;
+  height: 420px;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Knowledge詳細モーダル */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  z-index: 10;
+}
+
+.modal-content {
+  position: relative;
+  background: #fff;
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 480px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  background: none;
+  border: none;
+  font-size: 1.3rem;
+  line-height: 1;
+  color: #888;
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+.modal-title {
+  margin: 0 1.5rem 0.75rem 0;
+  font-size: 1.15rem;
+}
+
+.modal-statement {
+  margin: 0 0 1rem;
+  line-height: 1.7;
+  color: #333;
+}
+
+.modal-meta {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.modal-meta dt {
+  color: #888;
+  margin-top: 0.6rem;
+}
+
+.modal-meta dt:first-child {
+  margin-top: 0;
+}
+
+.modal-meta dd {
+  margin: 0.15rem 0 0;
+  color: #333;
+}
+
+.modal-related-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+/* Empty State: 寂しい管理画面にならないよう、モグラと前向きな一言を添える。 */
+.understanding-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 1rem;
+  padding: 3rem 1rem;
+}
+
+.understanding-empty-image {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+}
+
+.understanding-empty-text {
+  margin: 0;
+  color: #666;
+  line-height: 1.7;
 }
 
