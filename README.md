@@ -255,4 +255,6 @@ npm run dev
 - **`active`→`foundational`への自動昇格**（「十分理解された」Knowledgeを暗黙の前提として扱う仕組み。`status`フィールド自体は用意済み）
 - 認証・ユーザーごとのデータ分離（現状はすべてのKnowledgeが固定ユーザーに紐づくMVP実装）
 
+「Knowledge Map = ユーザーの現時点の理解状態」を表現するためのデータモデルの土台として、Topic（俯瞰用の粗い分類）・Concept（具体的な理解対象）・ConceptRelation（Concept間のつながり）を、既存のKnowledge（`concept`文字列・`topicPath`）とは独立に並存する形で追加しました（`backend/src/topic.ts` / `concept.ts` / `conceptRelation.ts` / `understandingStructure.ts`、新設`GET /api/understanding-map`。詳細は[`backend/README.md`](backend/README.md#topic--concept--conceptrelationモデルtopicts--conceptts--conceptrelationts--understandingstructurets)を参照）。今回はデータモデルと最低限の動作（Concept/Topicへのlazy migration、保存時のConceptRelation生成、Concept単位のTopic分類）のみで、Map UI自体の本格的な刷新は次回のPRで行います。
+
 ニュースURLはあくまで最初の入力手段の一例であり、将来的には記事・動画・書籍・会話メモなど、さまざまな「興味の入口」を扱えるデータモデルにする想定です。設計は今後のイテレーションで詰めていきます。

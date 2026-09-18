@@ -12,6 +12,7 @@ import {
   parseSaveKnowledgeRequest,
   saveCandidatesAsKnowledge,
   fetchUserKnowledge,
+  fetchUnderstandingMap,
 } from "./knowledgeApi.js";
 import { LlmProviderError, toSafeApiResponse } from "./llm/provider/llmProviderError.js";
 import type { DigRequest } from "./types.js";
@@ -185,6 +186,19 @@ app.get("/api/knowledge", async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "知識の取得に失敗しました";
     console.error("[api/knowledge] error", { message });
+    return c.json({ error: message }, 502);
+  }
+});
+
+// Topic/Concept/Knowledgeモデル（understandingStructure.ts）用。既存のGET /api/knowledgeとは
+// 独立した新しいエンドポイントで、現在のTopic階層・Concept・ConceptRelationを返す。
+app.get("/api/understanding-map", async (c) => {
+  try {
+    const map = await fetchUnderstandingMap();
+    return c.json(map);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "理解構造の取得に失敗しました";
+    console.error("[api/understanding-map] error", { message });
     return c.json({ error: message }, 502);
   }
 });

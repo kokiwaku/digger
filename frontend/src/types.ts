@@ -98,6 +98,10 @@ export type SavedKnowledge = {
   relationsOut?: KnowledgeRelationOut[];
   // 「自分の理解」ページのトピックビュー用。1〜3階層のパス。未分類の場合は省略される。
   topicPath?: string[];
+  // 新しいTopic/Concept/Knowledgeモデル（backendのunderstandingStructure.ts）用のConcept参照。
+  // 今回のPRではUI側でまだ利用しない（既存のconcept文字列表示を変更しないため）が、
+  // 型としては先行して同期しておく。
+  conceptIds?: string[];
   createdAt: string;
   updatedAt?: string;
 };
