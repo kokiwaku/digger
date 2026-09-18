@@ -1,10 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import ReactFlow, { Background, Controls, MiniMap, type Edge, type Node } from "reactflow";
+import ReactFlow, {
+  Background,
+  Controls,
+  MiniMap,
+  useEdgesState,
+  useNodesState,
+  type Edge,
+  type Node,
+} from "reactflow";
 import "reactflow/dist/style.css";
 import type { ConceptRelation, ConceptRelationType, SavedKnowledge, Topic, UnderstandingConcept } from "./types";
 import { STATUS_LABELS, effectiveStatus, statusClassName } from "./UnderstandingPage";
+import ConceptNode, { type ConceptNodeData } from "./ConceptNode";
+import {
+  UNCLASSIFIED_CLUSTER,
+  buildTopicColorMap,
+  computeClusterCenters,
+  computeClusterLabelPositions,
+  computeConceptDegree,
+  computeConceptRadius,
+  computeForceLayout,
+  getClusterKey,
+  type ForceLinkInput,
+  type ForceNodeInput,
+  type Point,
+} from "./mapLayout";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
+
+const NODE_TYPES = { concept: ConceptNode };
+const CLUSTER_LABEL_PREFIX = "cluster-label-";
+const MINIMAP_THRESHOLD = 15;
 
 type UnderstandingMapData = {
   topics: Topic[];
@@ -93,30 +119,6 @@ function collectDescendantTopicIds(topics: Topic[], rootId: string): Set<string>
   return result;
 }
 
-// topicIdの親をたどってルートTopicのidを返す（マップのクラスタ分けに使う）。
-function findRootTopicId(topics: Topic[], topicId: string): string {
-  const byId = new Map(topics.map((t) => [t._id, t]));
-  let current = byId.get(topicId);
-  const seen = new Set<string>();
-  while (current?.parentId && !seen.has(current._id)) {
-    seen.add(current._id);
-    const parent = byId.get(current.parentId);
-    if (!parent) break;
-    current = parent;
-  }
-  return current?._id ?? topicId;
-}
-
-const UNCLASSIFIED_CLUSTER = "__unclassified__";
-
-// クラスタ分けの基準は、Conceptの最初のtopicIdが属するルートTopic。
-// topicIdsが空（未分類）のConceptは専用の「未分類」クラスタに入れる。
-function getClusterKey(concept: UnderstandingConcept, topics: Topic[]): string {
-  const primaryTopicId = concept.topicIds[0];
-  if (!primaryTopicId) return UNCLASSIFIED_CLUSTER;
-  return findRootTopicId(topics, primaryTopicId);
-}
-
 function getVisibleConcepts(
   activeConcepts: UnderstandingConcept[],
   topics: Topic[],
@@ -141,115 +143,12 @@ function countKnowledgeByConcept(knowledge: SavedKnowledge[]): Map<string, Saved
   return map;
 }
 
-function computeConceptDegree(conceptId: string, knowledgeCount: number, relations: ConceptRelation[]): number {
-  const relationCount = relations.filter((r) => r.fromConceptId === conceptId || r.toConceptId === conceptId).length;
-  return knowledgeCount + relationCount;
-}
-
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 function isRecentlyChanged(concept: UnderstandingConcept, knowledgeItems: SavedKnowledge[]): boolean {
   const now = Date.now();
   if (now - new Date(concept.createdAt).getTime() <= WEEK_MS) return true;
   return knowledgeItems.some((k) => now - new Date(k.createdAt).getTime() <= WEEK_MS);
-}
-
-function truncateLabel(text: string, max = 14): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
-const CLUSTER_LABEL_PREFIX = "cluster-label-";
-
-// 力学シミュレーション等の専用ライブラリは導入せず、単純な「クラスタごとの円形レイアウト」で
-// 初期配置する（PR #14/#15と同じ考え方）。ノードはConcept名のみをlabelにし、
-// Knowledge本文はnode化しない。degreeに応じてわずかにサイズを変える。
-function layoutConceptsByCluster(
-  concepts: UnderstandingConcept[],
-  topics: Topic[],
-  knowledgeByConcept: Map<string, SavedKnowledge[]>,
-  relations: ConceptRelation[],
-): Node[] {
-  const groups = new Map<string, UnderstandingConcept[]>();
-  for (const concept of concepts) {
-    const key = getClusterKey(concept, topics);
-    const list = groups.get(key);
-    if (list) list.push(concept);
-    else groups.set(key, [concept]);
-  }
-
-  const clusterKeys = Array.from(groups.keys());
-  const clusterCount = Math.max(clusterKeys.length, 1);
-  // クラスタ数が増えてもReactFlowのfitViewが対応できるminZoom範囲に収まるよう、
-  // 半径は緩やかにしか広げない（PR #14での教訓）。
-  const clusterRadius = Math.max(160, clusterCount * 55);
-  const clusterAngleStep = (2 * Math.PI) / clusterCount;
-  const topicNameById = new Map(topics.map((t) => [t._id, t.name]));
-
-  const nodes: Node[] = [];
-
-  clusterKeys.forEach((key, clusterIndex) => {
-    const members = groups.get(key) ?? [];
-    const clusterAngle = clusterIndex * clusterAngleStep;
-    const centerX = clusterRadius + clusterRadius * Math.cos(clusterAngle);
-    const centerY = clusterRadius + clusterRadius * Math.sin(clusterAngle);
-    const innerRadius = members.length <= 1 ? 0 : Math.max(70, members.length * 20);
-    const innerAngleStep = (2 * Math.PI) / Math.max(members.length, 1);
-    const clusterLabel = key === UNCLASSIFIED_CLUSTER ? "未分類" : (topicNameById.get(key) ?? "未分類");
-
-    nodes.push({
-      id: `${CLUSTER_LABEL_PREFIX}${key}`,
-      data: { label: clusterLabel },
-      position: { x: centerX, y: centerY - innerRadius - 36 },
-      draggable: false,
-      selectable: false,
-      connectable: false,
-      style: {
-        border: "none",
-        background: "transparent",
-        color: "#2b6cb0",
-        fontWeight: 700,
-        fontSize: "0.78rem",
-        padding: 0,
-        pointerEvents: "none",
-      },
-    });
-
-    members.forEach((concept, memberIndex) => {
-      const angle = memberIndex * innerAngleStep;
-      const knowledgeItems = knowledgeByConcept.get(concept._id) ?? [];
-      const degree = computeConceptDegree(concept._id, knowledgeItems.length, relations);
-      const sizeBoost = Math.min(degree, 8);
-      const isNew = isRecentlyChanged(concept, knowledgeItems);
-
-      nodes.push({
-        id: concept._id,
-        data: {
-          label: (
-            <span title={concept.name}>
-              {isNew && <span className="concept-node-badge">NEW</span>}
-              {truncateLabel(concept.name)}
-            </span>
-          ),
-        },
-        position: {
-          x: centerX + innerRadius * Math.cos(angle),
-          y: centerY + innerRadius * Math.sin(angle),
-        },
-        style: {
-          border: `${1 + Math.floor(sizeBoost / 3)}px solid #2b6cb0`,
-          borderRadius: 10,
-          padding: `${(0.3 + sizeBoost * 0.02).toFixed(2)}rem ${(0.55 + sizeBoost * 0.02).toFixed(2)}rem`,
-          fontSize: `${(0.75 + sizeBoost * 0.01).toFixed(2)}rem`,
-          maxWidth: 130,
-          background: "#fff",
-          color: "#1a1a1a",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-        },
-      });
-    });
-  });
-
-  return nodes;
 }
 
 const RELATION_TYPE_LABEL: Record<ConceptRelationType, string> = {
@@ -263,7 +162,7 @@ const RELATION_TYPE_LABEL: Record<ConceptRelationType, string> = {
 };
 
 // relation typeを色分けで複雑化せず、edgeが「つながっている」ことが分かる程度の
-// 控えめな単色＋小さなラベルにとどめる。
+// 控えめな単色＋小さなラベルにとどめる（hover時のみ強調、UnderstandingMapView側で処理）。
 function buildConceptEdges(relations: ConceptRelation[], visibleIds: Set<string>): Edge[] {
   return relations
     .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
@@ -272,8 +171,8 @@ function buildConceptEdges(relations: ConceptRelation[], visibleIds: Set<string>
       source: r.fromConceptId,
       target: r.toConceptId,
       label: RELATION_TYPE_LABEL[r.type],
-      style: { stroke: "#bbb" },
-      labelStyle: { fontSize: 10, fill: "#888" },
+      style: { stroke: "#ddd" },
+      labelStyle: { fontSize: 10, fill: "#aaa" },
     }));
 }
 
@@ -313,10 +212,14 @@ function TopicNavTree({
   nodes,
   selectedTopicId,
   onSelect,
+  colorMap,
+  depth = 0,
 }: {
   nodes: TopicTreeNode[];
   selectedTopicId: string | null;
   onSelect: (id: string) => void;
+  colorMap: Map<string, string>;
+  depth?: number;
 }) {
   return (
     <ul className="map-topic-nav-tree">
@@ -327,11 +230,20 @@ function TopicNavTree({
             className={selectedTopicId === node.id ? "map-topic-nav-item active" : "map-topic-nav-item"}
             onClick={() => onSelect(node.id)}
           >
+            {depth === 0 && (
+              <span className="map-topic-nav-dot" style={{ background: colorMap.get(node.id) ?? "#ccc" }} />
+            )}
             {node.name}
           </button>
           {node.children.length > 0 && (
             <div className="map-topic-nav-children">
-              <TopicNavTree nodes={node.children} selectedTopicId={selectedTopicId} onSelect={onSelect} />
+              <TopicNavTree
+                nodes={node.children}
+                selectedTopicId={selectedTopicId}
+                onSelect={onSelect}
+                colorMap={colorMap}
+                depth={depth + 1}
+              />
             </div>
           )}
         </li>
@@ -435,11 +347,20 @@ export default function UnderstandingMapView({
   const [mapState, setMapState] = useState<MapFetchState>({ status: "loading" });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
+  const [hoveredConceptId, setHoveredConceptId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  const [layoutVersion, setLayoutVersion] = useState(0);
   const appliedInitialTopicRef = useRef(false);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | { label: string }>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
+  const nodesRef = useRef<Node[]>([]);
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -479,11 +400,11 @@ export default function UnderstandingMapView({
     [activeConcepts, topics, selectedTopicId],
   );
   const visibleIds = useMemo(() => new Set(visibleConcepts.map((c) => c._id)), [visibleConcepts]);
-  const nodes = useMemo(
-    () => layoutConceptsByCluster(visibleConcepts, topics, knowledgeByConcept, relations),
-    [visibleConcepts, topics, knowledgeByConcept, relations],
+  const allClusterKeys = useMemo(
+    () => Array.from(new Set(activeConcepts.map((c) => getClusterKey(c, topics)))),
+    [activeConcepts, topics],
   );
-  const edges = useMemo(() => buildConceptEdges(relations, visibleIds), [relations, visibleIds]);
+  const topicColorMap = useMemo(() => buildTopicColorMap(allClusterKeys), [allClusterKeys]);
   const summary = useMemo(
     () => computeMapSummary(knowledge, topics, concepts, relations),
     [knowledge, topics, concepts, relations],
@@ -492,6 +413,119 @@ export default function UnderstandingMapView({
     () => activeConcepts.filter((c) => c.topicIds.length === 0).length,
     [activeConcepts],
   );
+
+  // ノードの初期配置（force-directed layout）を計算し、React Flowのnodes/edges stateへ反映する。
+  // resetPositions=falseのときは直前の位置をwarm startとして使い（ドラッグ位置・既存クラスタの
+  // 位置を尊重）、resetPositions=true（「整列」ボタン）のときは全ノードをクラスタ中心付近へ
+  // 再シードする。この関数は「①データ取得/更新」「②Topicフィルタ変更」「③整列ボタン」の
+  // 3か所からしか呼ばれない（hoverや詳細パネルの開閉など他の再レンダーでは呼ばれない）ため、
+  // ユーザーがドラッグした位置がそれ以外のタイミングで勝手に戻ることはない。
+  function recomputeLayout(resetPositions: boolean) {
+    const clusterKeys = Array.from(new Set(visibleConcepts.map((c) => getClusterKey(c, topics))));
+    const clusterCenters = computeClusterCenters(clusterKeys);
+    const topicNameById = new Map(topics.map((t) => [t._id, t.name]));
+
+    const forceNodes: ForceNodeInput[] = visibleConcepts.map((c) => {
+      const knowledgeItems = knowledgeByConcept.get(c._id) ?? [];
+      const degree = computeConceptDegree(c._id, knowledgeItems.length, relations);
+      return { id: c._id, clusterKey: getClusterKey(c, topics), radius: computeConceptRadius(degree) };
+    });
+    const forceLinks: ForceLinkInput[] = relations
+      .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
+      .map((r) => ({ source: r.fromConceptId, target: r.toConceptId }));
+
+    const previousPositions = resetPositions
+      ? undefined
+      : new Map<string, Point>(nodesRef.current.map((n) => [n.id, n.position]));
+    const positions = computeForceLayout(forceNodes, forceLinks, clusterCenters, previousPositions);
+    const labelPositions = computeClusterLabelPositions(forceNodes, positions);
+
+    const newNodes: Node[] = [];
+    for (const [key, pos] of labelPositions) {
+      newNodes.push({
+        id: `${CLUSTER_LABEL_PREFIX}${key}`,
+        type: "default",
+        data: { label: key === UNCLASSIFIED_CLUSTER ? "未分類" : (topicNameById.get(key) ?? "未分類") },
+        position: pos,
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        style: {
+          border: "none",
+          background: "transparent",
+          color: topicColorMap.get(key) ?? "#888",
+          fontWeight: 700,
+          fontSize: "0.78rem",
+          padding: 0,
+          pointerEvents: "none",
+        },
+      });
+    }
+
+    for (const concept of visibleConcepts) {
+      const pos = positions.get(concept._id) ?? { x: 0, y: 0 };
+      const knowledgeItems = knowledgeByConcept.get(concept._id) ?? [];
+      const degree = computeConceptDegree(concept._id, knowledgeItems.length, relations);
+      const clusterKey = getClusterKey(concept, topics);
+      const data: ConceptNodeData = {
+        name: concept.name,
+        knowledgeCount: knowledgeItems.length,
+        color: topicColorMap.get(clusterKey) ?? "#2b6cb0",
+        isNew: isRecentlyChanged(concept, knowledgeItems),
+        dimmed: false,
+        highlighted: false,
+        radius: computeConceptRadius(degree),
+      };
+      newNodes.push({ id: concept._id, type: "concept", position: pos, data });
+    }
+
+    setNodes(newNodes);
+    setEdges(buildConceptEdges(relations, visibleIds));
+    setLayoutVersion((v) => v + 1);
+  }
+
+  // トリガー①②: データ取得・更新（mapStateの参照が変わる）とTopicフィルタ変更。
+  // eslint的なexhaustive-depsはあえて満たさず、この2つの変化だけを明示的なトリガーにする
+  // （visibleConcepts等の派生値まで依存に含めると、hoverや詳細パネル開閉のたびに
+  // レイアウトが再計算されてしまうため）。
+  useEffect(() => {
+    if (mapState.status !== "success") return;
+    recomputeLayout(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTopicId, mapState]);
+
+  const neighborIds = useMemo(() => {
+    if (!hoveredConceptId) return null;
+    const ids = new Set<string>([hoveredConceptId]);
+    for (const r of relations) {
+      if (r.fromConceptId === hoveredConceptId) ids.add(r.toConceptId);
+      if (r.toConceptId === hoveredConceptId) ids.add(r.fromConceptId);
+    }
+    return ids;
+  }, [hoveredConceptId, relations]);
+
+  const displayNodes = useMemo(() => {
+    if (!neighborIds) return nodes;
+    return nodes.map((n) => {
+      if (n.type !== "concept") return n;
+      const highlighted = neighborIds.has(n.id);
+      return { ...n, data: { ...n.data, highlighted, dimmed: !highlighted } };
+    });
+  }, [nodes, neighborIds]);
+
+  const displayEdges = useMemo(() => {
+    if (!hoveredConceptId) return edges;
+    return edges.map((e) => {
+      const touches = e.source === hoveredConceptId || e.target === hoveredConceptId;
+      return {
+        ...e,
+        style: { stroke: touches ? "#2b6cb0" : "#eee" },
+        labelStyle: { fontSize: 10, fill: touches ? "#2b6cb0" : "#ddd" },
+        zIndex: touches ? 1 : 0,
+      };
+    });
+  }, [edges, hoveredConceptId]);
+
   const selectedConcept = useMemo(
     () => activeConcepts.find((c) => c._id === selectedConceptId) ?? null,
     [activeConcepts, selectedConceptId],
@@ -574,13 +608,18 @@ export default function UnderstandingMapView({
         <p className="map-summary-recent">
           今週 +{summary.recentKnowledge}件の理解 ・ +{summary.recentRelations}件のつながり
         </p>
-        <button type="button" className="map-refresh-button" onClick={handleRefresh} disabled={refreshing}>
-          {refreshing
-            ? "更新中…"
-            : unclassifiedCount > 0
-              ? `理解マップを更新（未分類 ${unclassifiedCount}件）`
-              : "理解マップを更新"}
-        </button>
+        <div className="map-toolbar-buttons">
+          <button type="button" className="map-refresh-button" onClick={() => recomputeLayout(true)}>
+            整列
+          </button>
+          <button type="button" className="map-refresh-button" onClick={handleRefresh} disabled={refreshing}>
+            {refreshing
+              ? "更新中…"
+              : unclassifiedCount > 0
+                ? `理解マップを更新（未分類 ${unclassifiedCount}件）`
+                : "理解マップを更新"}
+          </button>
+        </div>
       </div>
       {refreshError && <p className="error-message">{refreshError}</p>}
 
@@ -608,18 +647,29 @@ export default function UnderstandingMapView({
           >
             すべて
           </button>
-          <TopicNavTree nodes={topicHierarchy} selectedTopicId={selectedTopicId} onSelect={handleSelectTopic} />
+          <TopicNavTree
+            nodes={topicHierarchy}
+            selectedTopicId={selectedTopicId}
+            onSelect={handleSelectTopic}
+            colorMap={topicColorMap}
+          />
         </aside>
         {mobileNavOpen && <div className="map-mobile-backdrop" onClick={() => setMobileNavOpen(false)} />}
 
         <div className="knowledge-map concept-map">
           <ReactFlow
-            key={selectedTopicId ?? "all"}
-            nodes={nodes}
-            edges={edges}
+            key={`${selectedTopicId ?? "all"}-${layoutVersion}`}
+            nodes={displayNodes}
+            edges={displayEdges}
+            nodeTypes={NODE_TYPES}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onNodeMouseEnter={(_, node) => {
+              if (node.type === "concept") setHoveredConceptId(node.id);
+            }}
+            onNodeMouseLeave={() => setHoveredConceptId(null)}
             onNodeClick={(_, node) => {
-              if (node.id.startsWith(CLUSTER_LABEL_PREFIX)) return;
-              handleSelectConcept(node.id);
+              if (node.type === "concept") handleSelectConcept(node.id);
             }}
             fitView
             minZoom={0.1}
@@ -627,7 +677,7 @@ export default function UnderstandingMapView({
           >
             <Background />
             <Controls showInteractive={false} />
-            <MiniMap pannable zoomable />
+            {visibleConcepts.length >= MINIMAP_THRESHOLD && <MiniMap pannable zoomable />}
           </ReactFlow>
         </div>
 
@@ -639,9 +689,7 @@ export default function UnderstandingMapView({
             />
             <div
               className={
-                mobileDetailOpen
-                  ? "concept-detail-panel-wrapper map-mobile-open"
-                  : "concept-detail-panel-wrapper"
+                mobileDetailOpen ? "concept-detail-panel-wrapper map-mobile-open" : "concept-detail-panel-wrapper"
               }
             >
               <ConceptDetailPanel

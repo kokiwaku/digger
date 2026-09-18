@@ -20,6 +20,8 @@ frontend/
 │   ├── App.tsx        # アプリ本体。URL入力〜「掘る」結果表示のUIと、ヘッダーナビゲーション
 │   ├── UnderstandingPage.tsx  # 「自分の理解」ページ（最近/トピック/マップの3タブ切り替え、Knowledge詳細モーダル）
 │   ├── UnderstandingMapView.tsx # 「マップ」タブの実体。Topic/Concept/ConceptRelationモデルによる3ペインMap UI
+│   ├── mapLayout.ts       # d3-forceによるMapの初期配置計算（Reactに依存しない純粋ロジック）
+│   ├── ConceptNode.tsx    # React FlowのCustom Node（Concept node本体）
 │   ├── App.css          # App.tsx・UnderstandingPage.tsx・UnderstandingMapView.tsx共通のスタイル
 │   ├── types.ts          # /api/dig 等のリクエスト/レスポンス型
 │   └── vite-env.d.ts   # Vite用の型定義（import.meta.env等）
@@ -90,7 +92,14 @@ flowchart TD
   - **データ取得**: マウント時に`GET /api/understanding-map`を呼びます（読み取り専用でlazy migrationやLLM呼び出しなどの副作用が無いため、タブを開き直すたびに呼んでも軽い）。`knowledge`（`SavedKnowledge[]`）は親の`UnderstandingPage`が既に持っているものをpropsで受け取り、二重fetchしません。
   - **「理解マップを更新」ボタン**: `POST /api/understanding-map/refresh`を呼びます（未移行のKnowledgeのConcept化＋未分類ConceptのLLM Topic分類を行う、相対的に重い処理）。ボタン付近に未分類Concept数を表示し、押すタイミングの目安にします。押している間はボタンを無効化するだけの簡易的なローディング表現です。
   - **左: Topic Navigation（`TopicNavTree`）**: `Topic.parentId`から`buildTopicHierarchy()`で階層ツリーを構築（archived/mergedは除外）。「すべて」＋階層リストで、クリックすると`selectedTopicId`が変わり中央のMapが絞り込まれます。
-  - **中央: Concept Map**: 主役はConceptで、Knowledge本文はnode labelに使いません（`concept.name`のみ、`truncateLabel()`で14文字に短縮）。配置はPR「Map View の改善」と同じ「クラスタごとの円形レイアウト」の考え方を踏襲しますが、キーをトピック名の文字列ではなく実際の`Topic._id`（`findRootTopicId()`で親を辿ってルートTopicを特定）にしています。`topicIds`が空のConceptは「未分類」クラスタに入り、マップが壊れないようにしています。edgeは`ConceptRelation`で、色分けは最小限（灰色1色＋小さな日本語ラベル）にとどめ「つながっていること」が分かる程度にしています。nodeのサイズは紐づくKnowledge数と関係数から求めた`degree`でわずかに変化させ、直近7日以内に追加・更新されたConceptには`NEW`バッジを付けます。
+  - **中央: Concept Map（`mapLayout.ts` + `ConceptNode.tsx`）**: 主役はConceptで、Knowledge本文はnode labelに使いません（`concept.name`のみ）。node配置は[`d3-force`](https://github.com/d3/d3-force)のforce-directed layoutで計算します（`computeForceLayout()`）。「トピックごとに二重円で機械的に並べる」だけだった以前の実装（PR「Map View の改善」）から、「関連するConceptは近く、同じTopicのConceptは自然に集まる」有機的な配置に変更しました。
+    - **力の構成**: `forceLink`（`ConceptRelation`で繋がるConcept同士を引き寄せる）・`forceManyBody`（反発力で密集を防ぐ）・`forceCollide`（node半径＋余白で重なりを防ぐ）・`forceX`/`forceY`によるクラスタリング力（各Conceptを、そのConceptが属するルートTopic＝`findRootTopicId()`で求めた中心点へ弱く引き寄せる。トップレベルTopicごとの中心点自体は`computeClusterCenters()`が外周円上に配置する。`topicIds`が空のConceptは「未分類」クラスタに入る）を組み合わせています。
+    - **一度だけ計算して止める**: `forceSimulation`はcontinuous animationにはせず、`simulation.stop()`を呼んだ上で`tick()`を固定回数（300回）同期的に回してから最終座標を読み取ります。React Flowの`useNodesState`/`useEdgesState`を使い、`setNodes(...)`を呼ぶのは「①データ取得・更新」「②Topicフィルタ変更」「③『整列』ボタン押下」の3か所だけに限定しているため、hoverや詳細パネルの開閉などそれ以外の再レンダーではレイアウトが再計算されず、ユーザーがドラッグした位置も勝手に戻りません。フィルタ変更時は直前のnode位置をwarm start（力学シミュレーションの初期値）として渡すため、絞り込みの前後で表示が大きく飛ばないようにしています。「整列」ボタンはこのwarm startを使わず、全nodeをクラスタ中心付近へ明示的に再シードします。
+    - **hover interaction**: nodeにカーソルを合わせると、そのnodeと直接`ConceptRelation`で繋がるnode・edgeだけを強調し、それ以外を薄くします（`ConceptNode.tsx`の`highlighted`/`dimmed` propと、`UnderstandingMapView.tsx`の`displayNodes`/`displayEdges`という「位置はそのままに見た目だけを動的に上書きする」派生配列で実現）。
+    - **色分け**: トップレベルTopic（ルートTopic）ごとに固定パレットから色を割り当て（`buildTopicColorMap()`）、node枠線・クラスタラベル・Topic Navigationの色ドットに使います。未分類は常に固定のグレーです。以前のPRでこの色分けが実装から抜け落ちていた（後退）ため、今回復元しました。
+    - **node size**: 紐づくKnowledge数と関係数から求めた`degree`（`computeConceptDegree()`）で、視覚サイズと衝突判定半径の両方を決めます（`computeConceptRadius()`）。差は小さく抑えています。直近7日以内に追加・更新されたConceptには`NEW`バッジを付けます。
+    - **edge**: 色分けは最小限（灰色1色＋小さな日本語typeラベル）にとどめ、hover時のみ強調します。
+    - **MiniMap**: Concept 15件以上のときだけ表示します（React Flowの`<MiniMap />`をそのまま使用）。
     - **モバイルでのはまりどころ**: `.understanding-map-layout`がモバイルで`flex-direction: column`になるため、Map要素のbase CSS（`.concept-map { flex: 1 1 0%; }`）のflex-basisがcolumn方向では高さの基準として優先され、`height`指定を上書きしてしまい、モバイルでMapの高さが0になって何も表示されないバグがありました。モバイル用メディアクエリ側で`flex: none;`をリセットすることで解消しています。
   - **右: Concept Detail（`ConceptDetailPanel`）**: 選択したConceptの名前、所属Topicのパンくず（`buildTopicBreadcrumb()`）、紐づくKnowledge一覧（`SavedKnowledge.conceptIds`から逆引き。`outdated`は除外、`merged`は控えめ表示、`foundational`はラベル付き。`UnderstandingPage.tsx`の`STATUS_LABELS`/`effectiveStatus`/`statusClassName`をexportして再利用）、関連Concept一覧（`ConceptRelation`の双方向）、参照元記事リンクを表示します。
   - **成長summary（`computeMapSummary()`）**: 「Knowledge N件・トピック N個・概念 N個・つながり N件」＋「今週 +N件の理解・+M件のつながり」を、既存データ（`createdAt`）だけから計算して表示します。
@@ -124,6 +133,8 @@ flowchart TD
 - `@vitejs/plugin-react` — Viteの公式Reactプラグイン（Fast Refresh対応）
 - `vite` — 開発サーバー/バンドラー
 - `typescript` — 型チェック（`tsc -b` はビルド時のみ実行、Vite自体はesbuildでトランスパイル）
+- `reactflow` — 「自分の理解」ページのマップ表示（zoom/pan/drag/クリック/MiniMap等）
+- `d3-force`（+ `@types/d3-force`） — マップのnode初期配置計算（force-directed layout）。`d3`本体ではなくforce計算に必要な`d3-force`のみを導入しバンドルサイズを抑えている
 
 ## ローカル起動
 

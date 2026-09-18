@@ -679,8 +679,13 @@
   color: #777;
 }
 
-.map-refresh-button {
+.map-toolbar-buttons {
   margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.map-refresh-button {
   background: #fff;
   border: 1px solid #ddd;
   border-radius: 999px;
@@ -727,7 +732,9 @@
 }
 
 .map-topic-nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   width: 100%;
   text-align: left;
   background: none;
@@ -743,6 +750,13 @@
 .map-topic-nav-item.active {
   background: #1a1a1a;
   color: #fff;
+}
+
+.map-topic-nav-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .map-topic-nav-tree {
@@ -763,16 +777,70 @@
   height: 560px;
 }
 
+/* Concept node（React FlowのCustom Node、ConceptNode.tsx）。
+   丸いカード状のnodeにConcept名とKnowledge数だけを表示し、Knowledge本文は表示しない。 */
+.concept-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid #2b6cb0;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  padding: 0.35rem;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    opacity 0.15s ease,
+    box-shadow 0.15s ease,
+    border-width 0.15s ease;
+}
+
+.concept-node-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #1a1a1a;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.concept-node-count {
+  margin-top: 0.15rem;
+  font-size: 0.58rem;
+  color: #999;
+}
+
+/* hover中のnode、およびhover対象と直接つながるnodeを強調する。 */
+.concept-node-highlighted {
+  border-width: 3px;
+  box-shadow: 0 2px 10px rgba(43, 108, 176, 0.35);
+  z-index: 2;
+}
+
+/* hover中は、関係の無いnodeを控えめに薄くして関係を追いやすくする。 */
+.concept-node-dimmed {
+  opacity: 0.25;
+}
+
 .concept-node-badge {
-  display: inline-block;
-  margin-right: 0.3rem;
+  position: absolute;
+  top: -6px;
+  right: 2px;
   padding: 0 0.3rem;
   border-radius: 4px;
   background: #2b6cb0;
   color: #fff;
-  font-size: 0.6rem;
+  font-size: 0.55rem;
   font-weight: 700;
-  vertical-align: middle;
+  line-height: 1.4;
 }
 
 .concept-detail-panel-wrapper {
