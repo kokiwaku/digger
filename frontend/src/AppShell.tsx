@@ -12,7 +12,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <img className="brand-icon" src="/assets/frames/mole-icon.png" alt="" aria-hidden="true" />
           Digger
         </h1>
-        <p className="tagline">興味を持ったことを深掘りし、理解を蓄積していくためのツール</p>
+        <p className="tagline">掘って、繋がる、私の理解</p>
 
         <nav className="app-nav">
           <NavLink to="/dig" className={({ isActive }) => (isActive ? "app-nav-link active" : "app-nav-link")}>

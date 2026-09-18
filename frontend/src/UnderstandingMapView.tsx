@@ -75,8 +75,8 @@ type TopicTreeNode = {
   children: TopicTreeNode[];
 };
 
-// Topic.parentIdから階層ツリーを組み立てる（archived/mergedは除外）。Topic選択用の
-// <select>（フラットにインデント表示）を組み立てるためだけに使い、Map上の描画には
+// Topic.parentIdから階層ツリーを組み立てる（archived/mergedは除外）。Topic選択のボタン
+// （ルートTopicのみ使用、`.children`は参照しない）を組み立てるために使う。Map上の描画には
 // 使わない（Map上はルートTopicごとのクラスタラベル1つだけで、階層は表示しない）。
 function buildTopicHierarchy(topics: Topic[]): TopicTreeNode[] {
   const active = topics.filter((t) => t.status === "active");
@@ -124,58 +124,14 @@ function collectDescendantTopicIds(topics: Topic[], rootId: string): Set<string>
   return result;
 }
 
-// selectedTopicIdが無いときの起点（=「すべて」表示時に階層の深さ0として扱うTopic群）。
-// ルートTopic（parentIdが無いactiveなTopic）を起点にする。
-function getBaseTopicIds(topics: Topic[], selectedTopicId: string | null): string[] {
-  if (selectedTopicId) return [selectedTopicId];
-  return topics.filter((t) => t.status === "active" && !t.parentId).map((t) => t._id);
-}
-
-// baseIdsを深さ0として、maxDepth階層下までのTopic idを集める（maxDepth=nullなら無制限）。
-// 「2階層まで表示」のような深さ制限フィルタのために使う。
-function collectTopicIdsWithinDepth(topics: Topic[], baseIds: string[], maxDepth: number | null): Set<string> {
-  if (maxDepth === null) {
-    const result = new Set<string>();
-    for (const id of baseIds) {
-      for (const descendantId of collectDescendantTopicIds(topics, id)) result.add(descendantId);
-    }
-    return result;
-  }
-
-  const childrenByParent = new Map<string, string[]>();
-  for (const topic of topics) {
-    if (!topic.parentId) continue;
-    const list = childrenByParent.get(topic.parentId);
-    if (list) list.push(topic._id);
-    else childrenByParent.set(topic.parentId, [topic._id]);
-  }
-
-  const result = new Set<string>();
-  let frontier = baseIds.map((id) => ({ id, depth: 0 }));
-  while (frontier.length > 0) {
-    const next: { id: string; depth: number }[] = [];
-    for (const { id, depth } of frontier) {
-      if (result.has(id)) continue;
-      result.add(id);
-      if (depth < maxDepth) {
-        for (const childId of childrenByParent.get(id) ?? []) next.push({ id: childId, depth: depth + 1 });
-      }
-    }
-    frontier = next;
-  }
-  return result;
-}
-
 function getVisibleConcepts(
   activeConcepts: UnderstandingConcept[],
   topics: Topic[],
   selectedTopicId: string | null,
-  maxDepth: number | null,
 ): UnderstandingConcept[] {
-  const baseIds = getBaseTopicIds(topics, selectedTopicId);
-  const allowed = collectTopicIdsWithinDepth(topics, baseIds, maxDepth);
-  // 未分類（topicIdsが空）のConceptは階層の深さの概念が無いため、常に表示対象にする。
-  return activeConcepts.filter((c) => c.topicIds.length === 0 || c.topicIds.some((id) => allowed.has(id)));
+  if (!selectedTopicId) return activeConcepts;
+  const allowed = collectDescendantTopicIds(topics, selectedTopicId);
+  return activeConcepts.filter((c) => c.topicIds.some((id) => allowed.has(id)));
 }
 
 // Conceptに紐づくKnowledgeをconceptIdごとにまとめる（outdatedは詳細一覧からも外す）。
@@ -207,28 +163,6 @@ const CONCEPT_LABEL_MAX_CHARS = 12;
 
 function truncateLabel(text: string, max = CONCEPT_LABEL_MAX_CHARS): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
-// ConceptRelationにはまだ「強さ」を表す独立したフィールドが無いため、backendの
-// データモデルは変えずにfrontend側だけの簡易的な基準で「弱いつながり」を判定する。
-// "related"は他のtype（前提/一部/要因/対立/深掘り/更新）と違って意味が限定されない
-// 最も緩やかな関連付けであるため、これだけを「弱いつながり」として扱う。
-function isWeakRelation(type: ConceptRelationType): boolean {
-  return type === "related";
-}
-
-function filterRelationsByStrength(relations: ConceptRelation[], showWeakLinks: boolean): ConceptRelation[] {
-  return showWeakLinks ? relations : relations.filter((r) => !isWeakRelation(r.type));
-}
-
-// トピック選択用の<select>に、階層の深さをインデントで表現しつつ全Topicをフラットに並べる。
-function flattenTopicOptions(nodes: TopicTreeNode[], depth = 0): { id: string; name: string; depth: number }[] {
-  const result: { id: string; name: string; depth: number }[] = [];
-  for (const node of nodes) {
-    result.push({ id: node.id, name: node.name, depth });
-    result.push(...flattenTopicOptions(node.children, depth + 1));
-  }
-  return result;
 }
 
 const RELATION_TYPE_LABEL: Record<ConceptRelationType, string> = {
@@ -413,12 +347,9 @@ export default function UnderstandingMapView({
   const navigate = useNavigate();
   const [mapState, setMapState] = useState<MapFetchState>({ status: "loading" });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
-  // 表示するTopic階層の深さ（選択中Topic、または「すべて」ならルートTopicを深さ0として数える）。
-  // nullは無制限。大きなマップでもクラスタが多すぎて見づらくならないよう、初期値は2階層までにする。
-  const [maxDepth, setMaxDepth] = useState<number | null>(2);
-  // ConceptRelationに強さの区分がまだ無いため、frontend側の簡易基準（isWeakRelation）で
-  // 「弱いつながり」を判定し、既定では非表示にする（つながりが多すぎて見づらくなるのを防ぐ）。
-  const [showWeakLinks, setShowWeakLinks] = useState(false);
+  // Topicのボタンは最初はルートTopicを5個までしか出さず（増えすぎると場所を取るため）、
+  // 「もっと表示する」を押すと全件表示に切り替える。
+  const [topicFilterExpanded, setTopicFilterExpanded] = useState(false);
   const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -509,14 +440,14 @@ export default function UnderstandingMapView({
   const topicById = useMemo(() => new Map(topics.map((t) => [t._id, t])), [topics]);
   const topicHierarchy = useMemo(() => buildTopicHierarchy(topics), [topics]);
   const visibleConcepts = useMemo(
-    () => getVisibleConcepts(activeConcepts, topics, selectedTopicId, maxDepth),
-    [activeConcepts, topics, selectedTopicId, maxDepth],
+    () => getVisibleConcepts(activeConcepts, topics, selectedTopicId),
+    [activeConcepts, topics, selectedTopicId],
   );
-  const visibleRelations = useMemo(
-    () => filterRelationsByStrength(relations, showWeakLinks),
-    [relations, showWeakLinks],
-  );
-  const topicOptions = useMemo(() => flattenTopicOptions(topicHierarchy), [topicHierarchy]);
+  // Topicのボタンはルートトピック（parentIdが無いもの）だけを表示する。
+  const rootTopics = useMemo(() => topicHierarchy.map((t) => ({ id: t.id, name: t.name })), [topicHierarchy]);
+  const TOPIC_CHIP_LIMIT = 5;
+  const visibleTopicChips = topicFilterExpanded ? rootTopics : rootTopics.slice(0, TOPIC_CHIP_LIMIT);
+  const hasMoreTopicChips = rootTopics.length > TOPIC_CHIP_LIMIT;
   const visibleIds = useMemo(() => new Set(visibleConcepts.map((c) => c._id)), [visibleConcepts]);
   const allClusterKeys = useMemo(
     () => Array.from(new Set(activeConcepts.map((c) => getClusterKey(c, topics)))),
@@ -554,7 +485,7 @@ export default function UnderstandingMapView({
     const clusterKeysSet = new Set(forceNodes.map((n) => n.clusterKey));
     const clusterCenters = computeClusterCenters(Array.from(clusterKeysSet));
 
-    const forceLinks: ForceLinkInput[] = visibleRelations
+    const forceLinks: ForceLinkInput[] = relations
       .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
       .map((r) => ({ source: r.fromConceptId, target: r.toConceptId }));
 
@@ -619,7 +550,7 @@ export default function UnderstandingMapView({
     }
 
     setNodes(newNodes);
-    setEdges(buildConceptEdges(visibleRelations, visibleIds));
+    setEdges(buildConceptEdges(relations, visibleIds));
     setLayoutVersion((v) => v + 1);
   }
 
@@ -631,7 +562,7 @@ export default function UnderstandingMapView({
     if (mapState.status !== "success") return;
     recomputeLayout(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTopicId, maxDepth, showWeakLinks, mapState]);
+  }, [selectedTopicId, mapState]);
 
   // Nodeを辿る体験の中心となる「隣接（1-hop）強調」。hoverは一時的なプレビュー、
   // 選択中Conceptの強調はそれが無いときのフォールバックとして働く（優先順位:
@@ -755,7 +686,6 @@ export default function UnderstandingMapView({
     } else {
       setPendingFocusConceptId(id);
       setSelectedTopicId(null);
-      setMaxDepth(null);
     }
   }
 
@@ -888,41 +818,36 @@ export default function UnderstandingMapView({
         </div>
       </div>
 
-      {/* Topicはツリー表示の左パネルではなく、セレクトボックスで絞り込む形にしている
-          （Topic数が増えても場所を取らず、モバイルでも同じUIで操作できるため）。 */}
-      <div className="map-filter-bar">
-        <select
-          className="map-filter-select"
-          value={selectedTopicId ?? ""}
-          onChange={(e) => handleSelectTopic(e.target.value || null)}
-          aria-label="表示するトピック"
+      {/* TopicはルートTopicだけをクリック可能なボタンとして並べる（子Topicまで並べると
+          数が増えすぎるため、絞り込みはMap上のクラスタラベルクリックでも代替できる）。
+          最初は5個までにとどめ、「もっと表示する」で全件表示に切り替える。 */}
+      <div className="map-topic-filter-bar">
+        <button
+          type="button"
+          className={selectedTopicId === null ? "map-topic-chip active" : "map-topic-chip"}
+          onClick={() => handleSelectTopic(null)}
         >
-          <option value="">すべてのトピック</option>
-          {topicOptions.map((opt) => (
-            <option key={opt.id} value={opt.id}>
-              {"　".repeat(opt.depth)}
-              {opt.name}
-            </option>
-          ))}
-        </select>
-
-        <select
-          className="map-filter-select"
-          value={maxDepth === null ? "all" : String(maxDepth)}
-          onChange={(e) => setMaxDepth(e.target.value === "all" ? null : Number(e.target.value))}
-          aria-label="表示する階層の深さ"
-        >
-          <option value="all">すべての階層を表示</option>
-          <option value="1">1階層まで表示</option>
-          <option value="2">2階層まで表示</option>
-          <option value="3">3階層まで表示</option>
-        </select>
-
-        <label className="map-filter-toggle">
-          <input type="checkbox" checked={showWeakLinks} onChange={(e) => setShowWeakLinks(e.target.checked)} />
-          <span className="map-filter-toggle-track" aria-hidden="true" />
-          関連の弱いつながりも表示
-        </label>
+          すべて
+        </button>
+        {visibleTopicChips.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={selectedTopicId === t.id ? "map-topic-chip active" : "map-topic-chip"}
+            onClick={() => handleSelectTopic(t.id)}
+          >
+            {t.name}
+          </button>
+        ))}
+        {hasMoreTopicChips && (
+          <button
+            type="button"
+            className="map-topic-chip map-topic-chip-more"
+            onClick={() => setTopicFilterExpanded((v) => !v)}
+          >
+            {topicFilterExpanded ? "少なく表示" : "もっと表示する"}
+          </button>
+        )}
       </div>
 
       <div className="understanding-map-layout">

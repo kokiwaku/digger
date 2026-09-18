@@ -33,9 +33,11 @@
 }
 
 /* 「掘る」画面だけは、会話中心の読みやすい狭い列に収める。 */
+/* .app-mainの中でmargin: 0 auto（中央寄せ）にすると、左のサイドバー分だけ画面全体の
+   中心とずれて「なぜか右寄りに見える」ため、左端揃えにする。 */
 .dig-page-inner {
   max-width: 640px;
-  margin: 0 auto;
+  margin: 0;
 }
 
 .app-bottom-nav {
@@ -878,79 +880,36 @@
   color: #999;
 }
 
-/* Topic/階層の深さ/弱いつながり表示を切り替えるフィルタ行。以前は左端に固定幅の
-   Topicツリーパネルを常設していたが、Topic数が増えると場所を取り視認性も落ちるため、
-   セレクトボックス＋トグルの1行に置き換えた（モバイルでも同じUIでそのまま使える）。 */
-.map-filter-bar {
+/* Topicの絞り込みは、ルートTopicだけをクリック可能なボタン（チップ）として並べる形にしている
+   （セレクトボックスや左パネルのツリーより、少数のルートTopicを一目で見渡せて選びやすいため）。 */
+.map-topic-filter-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem 0.9rem;
+  gap: 0.5rem;
   margin-bottom: 0.75rem;
 }
 
-.map-filter-select {
-  padding: 0.4rem 0.6rem;
+.map-topic-chip {
+  padding: 0.35rem 0.8rem;
   border: 1px solid #ddd;
-  border-radius: 6px;
+  border-radius: 999px;
   background: #fff;
-  color: #1a1a1a;
+  color: #333;
   font: inherit;
   font-size: 0.82rem;
-}
-
-.map-filter-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  color: #555;
   cursor: pointer;
-  user-select: none;
 }
 
-.map-filter-toggle input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  opacity: 0;
+.map-topic-chip.active {
+  background: #1a1a1a;
+  border-color: #1a1a1a;
+  color: #fff;
 }
 
-.map-filter-toggle-track {
-  position: relative;
-  width: 34px;
-  height: 20px;
-  border-radius: 10px;
-  background: #ddd;
-  flex-shrink: 0;
-  transition: background 0.15s ease;
-}
-
-.map-filter-toggle-track::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  transition: transform 0.15s ease;
-}
-
-.map-filter-toggle input:checked + .map-filter-toggle-track {
-  background: #2b6cb0;
-}
-
-.map-filter-toggle input:checked + .map-filter-toggle-track::after {
-  transform: translateX(14px);
-}
-
-.map-filter-toggle input:focus-visible + .map-filter-toggle-track {
-  outline: 2px solid #2b6cb0;
-  outline-offset: 2px;
+.map-topic-chip-more {
+  color: #2b6cb0;
+  border-style: dashed;
 }
 
 .concept-map {
@@ -1161,15 +1120,6 @@
 
   .map-search-box {
     max-width: none;
-  }
-
-  .map-filter-bar {
-    gap: 0.5rem;
-  }
-
-  .map-filter-select {
-    flex: 1 1 auto;
-    min-width: 0;
   }
 
   .map-mobile-backdrop {
