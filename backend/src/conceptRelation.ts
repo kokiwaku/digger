@@ -8,6 +8,8 @@ const CONCEPT_RELATION_COLLECTION = "concept_relations";
 
 // Map上のedgeを表現するConcept間の関係。typeを増やしすぎないよう、
 // 現在の実装（Knowledgeのextends/supersedes）と表現力のバランスが取れる範囲に絞る。
+// supersedes（既存の理解を置き換える）はcontrasts（対比・対立）とは意味が異なるため、
+// 別のtypeとして残す（lossyな変換をしない）。
 export const conceptRelationTypeSchema = z.enum([
   "related",
   "prerequisite",
@@ -15,6 +17,7 @@ export const conceptRelationTypeSchema = z.enum([
   "causes",
   "contrasts",
   "extends",
+  "supersedes",
 ]);
 export type ConceptRelationType = z.infer<typeof conceptRelationTypeSchema>;
 

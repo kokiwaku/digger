@@ -6,6 +6,6 @@ test("mapKnowledgeRelationTypeToConceptRelationType maps extends to extends", ()
   assert.equal(mapKnowledgeRelationTypeToConceptRelationType("extends"), "extends");
 });
 
-test("mapKnowledgeRelationTypeToConceptRelationType maps supersedes to contrasts", () => {
-  assert.equal(mapKnowledgeRelationTypeToConceptRelationType("supersedes"), "contrasts");
+test("mapKnowledgeRelationTypeToConceptRelationType maps supersedes to supersedes (no lossy conversion)", () => {
+  assert.equal(mapKnowledgeRelationTypeToConceptRelationType("supersedes"), "supersedes");
 });

@@ -17,7 +17,11 @@ import {
   toUserKnowledge,
   type SaveKnowledgeInput,
 } from "./knowledge.js";
-import { getUnderstandingMap, linkConceptsForSavedKnowledge } from "./understandingStructure.js";
+import {
+  getUnderstandingMap,
+  linkConceptsForSavedKnowledge,
+  refreshUnderstandingMap,
+} from "./understandingStructure.js";
 import type { UserKnowledge } from "./llm/personalizedAnalysis.js";
 
 export const extractKnowledgeRequestSchema = z.object({
@@ -174,7 +178,15 @@ export async function fetchUserKnowledge() {
 }
 
 // GET /api/understanding-map用。既存のGET /api/knowledgeとは別に、新しい
-// Topic/Concept/ConceptRelationモデルを返す（understandingStructure.tsを参照）。
+// Topic/Concept/ConceptRelationモデルを返す。読み取り専用で、lazy migrationや
+// LLMによるTopic分類などの副作用は一切行わない（副作用はrefreshUnderstandingMap参照）。
 export async function fetchUnderstandingMap() {
   return getUnderstandingMap();
+}
+
+// POST /api/understanding-map/refresh用。未移行のKnowledgeのConceptへの変換と、
+// 未分類のConceptのTopic分類（LLM呼び出しを伴う）を明示的に実行してから、
+// 更新後のTopic/Concept/ConceptRelationを返す。
+export async function refreshAndFetchUnderstandingMap() {
+  return refreshUnderstandingMap();
 }

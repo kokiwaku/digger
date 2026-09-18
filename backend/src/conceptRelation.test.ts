@@ -26,7 +26,7 @@ test("isDuplicateRelation treats reversed direction as not a duplicate", () => {
 });
 
 test("conceptRelationDocumentSchema accepts every allowed relation type", () => {
-  const types = ["related", "prerequisite", "part_of", "causes", "contrasts", "extends"] as const;
+  const types = ["related", "prerequisite", "part_of", "causes", "contrasts", "extends", "supersedes"] as const;
   for (const type of types) {
     const parsed = conceptRelationDocumentSchema.parse({
       userId: "local-user",
@@ -46,7 +46,7 @@ test("conceptRelationDocumentSchema rejects an unknown relation type", () => {
       userId: "local-user",
       fromConceptId: "a",
       toConceptId: "b",
-      type: "supersedes",
+      type: "unknown_type",
       createdAt: new Date(),
       updatedAt: new Date(),
     }),

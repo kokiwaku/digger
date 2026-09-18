@@ -19,10 +19,10 @@ import { findOrCreateTopicPath, getUserTopics, buildTopicPathStrings, type Topic
 import { getKnowledgeTopicService } from "./llm/knowledgeTopicFactory.js";
 
 // KnowledgeのrelationsOut（extends/supersedes）を、Concept間の関係typeへ変換する。
-// supersedesは「以前の理解を置き換える」に近いため、ConceptRelationのtypeとしては
-// 対立・置き換えを表す"contrasts"に寄せる（relation typeを増やしすぎないための調整）。
+// supersedes（既存の理解を置き換える）はcontrasts（対比・対立）とは意味が異なるため、
+// 情報を失わないようConceptRelationTypeにもsupersedesをそのまま残す（恒等変換）。
 export function mapKnowledgeRelationTypeToConceptRelationType(type: "extends" | "supersedes"): ConceptRelationType {
-  return type === "extends" ? "extends" : "contrasts";
+  return type;
 }
 
 // conceptIds未設定のKnowledgeについて、concept文字列からConceptをfind-or-createし、
@@ -148,12 +148,13 @@ export interface UnderstandingMap {
 }
 
 // GET /api/understanding-mapの実体。「現在の理解構造」をTopic階層・Concept・
-// ConceptRelationとして返す。呼ばれるたびに、未移行のKnowledge/未分類のConceptがあれば
-// 先に埋めてから返す（lazy migration + lazy classification）。
+// ConceptRelationとして、既存のDBの状態をそのまま読むだけの純粋な読み取り。
+// GETは副作用（lazy migrationやLLM呼び出し）を一切行わない
+// （読むだけのはずのAPIが「開いただけで重い処理」を引き起こすのを避けるため。
+// Conceptが増えるほどassignTopicsToUnclassifiedConcepts()のLLM呼び出しは重くなり、
+// 実際に25件程度でもVertex AIの30秒タイムアウトに達することがあった）。
+// migration/分類を進めたい場合はrefreshUnderstandingMap()を明示的に呼ぶ。
 export async function getUnderstandingMap(userId: string = FIXED_USER_ID): Promise<UnderstandingMap> {
-  await ensureConceptsForKnowledge(userId);
-  await assignTopicsToUnclassifiedConcepts(userId);
-
   const [topics, concepts, relations] = await Promise.all([
     getUserTopics(userId),
     getUserConcepts(userId),
@@ -161,4 +162,14 @@ export async function getUnderstandingMap(userId: string = FIXED_USER_ID): Promi
   ]);
 
   return { topics, concepts, relations };
+}
+
+// POST /api/understanding-map/refreshの実体。未移行のKnowledge（lazy migration）と
+// 未分類のConcept（lazy classification、LLM呼び出しを伴う）を明示的に処理してから、
+// 更新後の理解構造を返す。GETとは違い、これは呼び出し側が「重い処理が起きる」ことを
+// 理解した上で明示的に叩くエンドポイントである。
+export async function refreshUnderstandingMap(userId: string = FIXED_USER_ID): Promise<UnderstandingMap> {
+  await ensureConceptsForKnowledge(userId);
+  await assignTopicsToUnclassifiedConcepts(userId);
+  return getUnderstandingMap(userId);
 }
