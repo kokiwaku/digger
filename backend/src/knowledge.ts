@@ -4,6 +4,7 @@ import { getMongoClient } from "./db.js";
 import type { UserKnowledge } from "./llm/personalizedAnalysis.js";
 import type { KnowledgeRelation } from "./llm/knowledgeExtraction.js";
 import { getKnowledgeTopicService } from "./llm/knowledgeTopicFactory.js";
+import { knowledgeSourceSchema, type KnowledgeSource } from "./knowledgeSource.js";
 
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME ?? "digger";
 const KNOWLEDGE_COLLECTION = "user_knowledge";
@@ -37,11 +38,7 @@ export const knowledgeDocumentSchema = z.object({
   confidence: z.enum(["low", "medium", "high"]),
   // optional: 未設定の既存ドキュメントとの後方互換性のため。実際の扱いはgetEffectiveStatus()を通すこと。
   status: knowledgeStatusSchema.optional(),
-  source: z.object({
-    type: z.literal("web_article"),
-    url: z.string(),
-    title: z.string(),
-  }),
+  source: knowledgeSourceSchema,
   // Knowledge Extraction時にrelationToExistingが既存Knowledgeを指していた場合、その_idを記録する。
   // 今回はここに記録するだけで、自動統合（merged/outdatedへの変更等）は行わない。
   relatedKnowledgeIds: z.array(z.string()).optional(),
@@ -93,11 +90,7 @@ export interface SaveKnowledgeInput {
   statement: string;
   evidence: string;
   confidence: "low" | "medium" | "high";
-  source: {
-    type: "web_article";
-    url: string;
-    title: string;
-  };
+  source: KnowledgeSource;
   relationToExisting?: RelationToExistingInput;
 }
 

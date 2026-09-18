@@ -85,6 +85,26 @@ test("knowledgeDocumentSchema accepts a legacy document without status or relate
   assert.equal(getEffectiveStatus(parsed), "active");
 });
 
+test("knowledgeDocumentSchema accepts documents with a text or image source (non-URL input)", () => {
+  const textDoc = {
+    userId: "local-user",
+    concept: "メモの要点",
+    statement: "貼り付けたテキストから理解した内容",
+    evidence: "根拠",
+    confidence: "high" as const,
+    source: { type: "text" as const },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const imageDoc = {
+    ...textDoc,
+    source: { type: "image" as const, title: "スクリーンショット" },
+  };
+
+  assert.equal(knowledgeDocumentSchema.safeParse(textDoc).success, true);
+  assert.equal(knowledgeDocumentSchema.safeParse(imageDoc).success, true);
+});
+
 test("knowledgeDocumentSchema accepts a document with status and relatedKnowledgeIds", () => {
   const doc = {
     userId: "local-user",

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import type { KnowledgeStatus, SavedKnowledge } from "./types";
+import { sourceDisplayTitle } from "./sourceLabel";
 import UnderstandingMapView from "./UnderstandingMapView";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
@@ -180,11 +181,15 @@ function KnowledgeDetailModal({
           <dd>{new Date(item.createdAt).toLocaleDateString("ja-JP")}</dd>
           <dt>状態</dt>
           <dd>{STATUS_LABELS[effectiveStatus(item)]}</dd>
-          <dt>元の記事</dt>
+          <dt>{item.source.type === "web_article" ? "元の記事" : "入力元"}</dt>
           <dd>
-            <a href={item.source.url} target="_blank" rel="noreferrer">
-              {item.source.title}
-            </a>
+            {item.source.type === "web_article" ? (
+              <a href={item.source.url} target="_blank" rel="noreferrer">
+                {item.source.title}
+              </a>
+            ) : (
+              sourceDisplayTitle(item.source)
+            )}
           </dd>
           {relatedConcepts.length > 0 && (
             <>
@@ -212,10 +217,10 @@ function EmptyState() {
       <p className="understanding-empty-text">
         まだ理解マップは小さいです。
         <br />
-        気になる記事を掘ると、ここにあなたの理解が少しずつ育っていきます。
+        気になったものを掘ると、ここにあなたの理解が少しずつ育っていきます。
       </p>
       <button type="button" className="dig-button" onClick={() => navigate("/dig")}>
-        記事を掘る
+        掘りに行く
       </button>
     </div>
   );
@@ -230,7 +235,7 @@ function KnowledgeRow({ item, onSelect }: { item: SavedKnowledge; onSelect: (ite
         <p className="understanding-item-statement">{item.statement}</p>
         <p className="understanding-item-meta">
           {status !== "active" && <span className="understanding-item-status">{STATUS_LABELS[status]}</span>}
-          <span>{item.source.title}</span>
+          <span>{sourceDisplayTitle(item.source)}</span>
         </p>
       </button>
     </li>

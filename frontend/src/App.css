@@ -74,25 +74,95 @@
   line-height: 1.4;
 }
 
-.dig-form {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+/* Composer: URL/テキスト/画像を1つの入力欄＋画像添付ボタンで受け付ける（tab切り替えでは
+   なく、ChatGPTのComposerに近い単一入力を優先。URL/テキストの判別はユーザーに選ばせず、
+   送信時にbackendのresolveInputSource()が自動判定する）。 */
+.composer-form {
   margin-bottom: 1rem;
 }
 
-.dig-input {
-  flex: 1 1 260px;
-  min-width: 0;
+.composer-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.composer-textarea {
+  width: 100%;
+  box-sizing: border-box;
   padding: 0.75rem 1rem;
+  font: inherit;
   font-size: 1rem;
   border: 1px solid #ccc;
   border-radius: 8px;
+  resize: vertical;
 }
 
-.dig-input:focus {
+.composer-textarea:focus {
   outline: 2px solid #2b6cb0;
   outline-offset: 1px;
+}
+
+.composer-image-preview {
+  position: relative;
+  display: inline-block;
+  margin-top: 0.6rem;
+}
+
+.composer-image-preview img {
+  display: block;
+  max-width: 160px;
+  max-height: 160px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  object-fit: cover;
+}
+
+.composer-image-remove {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: #1a1a1a;
+  color: #fff;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.composer-file-input {
+  display: none;
+}
+
+.composer-attach-button {
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  color: #333;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.composer-attach-button:disabled {
+  color: #999;
+  cursor: not-allowed;
+}
+
+.composer-actions .dig-button {
+  margin-left: auto;
 }
 
 .dig-button {

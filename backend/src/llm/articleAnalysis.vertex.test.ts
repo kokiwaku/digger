@@ -105,6 +105,44 @@ test("analyze() propagates an LLM provider error immediately without retrying", 
   assert.equal(callCount, 1);
 });
 
+test("analyze() works for pasted text input (no title/url)", async () => {
+  const provider = fakeProvider(async () => JSON.stringify(VALID_ANALYSIS));
+  const service = createVertexArticleAnalysisService(() => provider);
+
+  const result = await service.analyze({ content: "貼り付けたテキストです。" });
+  assert.deepEqual(result, VALID_ANALYSIS);
+});
+
+test("analyze() passes the image through to the provider's images option for image input", async () => {
+  let receivedInput: Parameters<LlmProvider["generateText"]>[0] | undefined;
+  const provider = fakeProvider(async (input) => {
+    receivedInput = input;
+    return JSON.stringify(VALID_ANALYSIS);
+  });
+  const service = createVertexArticleAnalysisService(() => provider);
+
+  const result = await service.analyze({ image: { data: "aGVsbG8=", mimeType: "image/png" } });
+
+  assert.deepEqual(result, VALID_ANALYSIS);
+  assert.deepEqual(receivedInput?.images, [{ data: "aGVsbG8=", mimeType: "image/png" }]);
+});
+
+test("analyze() includes an image caption as extra context in the prompt without breaking the schema", async () => {
+  let receivedInput: Parameters<LlmProvider["generateText"]>[0] | undefined;
+  const provider = fakeProvider(async (input) => {
+    receivedInput = input;
+    return JSON.stringify(VALID_ANALYSIS);
+  });
+  const service = createVertexArticleAnalysisService(() => provider);
+
+  await service.analyze({
+    image: { data: "aGVsbG8=", mimeType: "image/png" },
+    content: "このグラフの意味は？",
+  });
+
+  assert.ok(receivedInput?.prompt.includes("このグラフの意味は？"));
+});
+
 test("analyze() rejects an invalid enum value (e.g. importance) even if otherwise well-formed", async () => {
   let callCount = 0;
   const provider = fakeProvider(async () => {

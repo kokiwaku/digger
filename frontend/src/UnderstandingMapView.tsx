@@ -14,6 +14,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import type { ConceptRelation, ConceptRelationType, SavedKnowledge, Topic, UnderstandingConcept } from "./types";
 import { STATUS_LABELS, effectiveStatus, statusClassName } from "./UnderstandingPage";
+import { sourceDisplayTitle } from "./sourceLabel";
 import ConceptNode, { type ConceptNodeData } from "./ConceptNode";
 import TopicNode, { type TopicNodeData } from "./TopicNode";
 import KnowledgeNode, { type KnowledgeNodeData } from "./KnowledgeNode";
@@ -407,9 +408,13 @@ function ConceptDetailPanel({
                 </button>
                 <p className="concept-detail-knowledge-meta">
                   {status !== "active" && <span className="understanding-item-status">{STATUS_LABELS[status]}</span>}
-                  <a href={item.source.url} target="_blank" rel="noreferrer">
-                    {item.source.title}
-                  </a>
+                  {item.source.type === "web_article" ? (
+                    <a href={item.source.url} target="_blank" rel="noreferrer">
+                      {item.source.title}
+                    </a>
+                  ) : (
+                    <span>{sourceDisplayTitle(item.source)}</span>
+                  )}
                 </p>
               </li>
             );
@@ -475,9 +480,13 @@ function KnowledgeDetailPanel({
       <p className={`concept-detail-knowledge-statement ${statusClassName(item)}`}>{item.statement}</p>
       <p className="concept-detail-knowledge-meta">
         {status !== "active" && <span className="understanding-item-status">{STATUS_LABELS[status]}</span>}
-        <a href={item.source.url} target="_blank" rel="noreferrer">
-          {item.source.title}
-        </a>
+        {item.source.type === "web_article" ? (
+          <a href={item.source.url} target="_blank" rel="noreferrer">
+            {item.source.title}
+          </a>
+        ) : (
+          <span>{sourceDisplayTitle(item.source)}</span>
+        )}
       </p>
 
       {concept && (
