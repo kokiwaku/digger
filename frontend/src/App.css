@@ -798,62 +798,79 @@
   position: relative;
 }
 
-.map-mobile-nav-toggle {
-  display: none;
+/* Topic/階層の深さ/弱いつながり表示を切り替えるフィルタ行。以前は左端に固定幅の
+   Topicツリーパネルを常設していたが、Topic数が増えると場所を取り視認性も落ちるため、
+   セレクトボックス＋トグルの1行に置き換えた（モバイルでも同じUIでそのまま使える）。 */
+.map-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.9rem;
+  margin-bottom: 0.75rem;
 }
 
-.map-topic-nav {
-  width: 190px;
-  flex-shrink: 0;
-  background: #fafafa;
-  border: 1px solid #eee;
-  border-radius: 10px;
-  padding: 0.75rem;
-  font-size: 0.85rem;
+.map-filter-select {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  color: #1a1a1a;
+  font: inherit;
+  font-size: 0.82rem;
 }
 
-.map-topic-nav-header {
-  display: none;
-}
-
-.map-topic-nav-item {
+.map-filter-toggle {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  padding: 0.3rem 0.4rem;
-  font: inherit;
-  font-size: 0.85rem;
-  color: #333;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #555;
   cursor: pointer;
+  user-select: none;
 }
 
-.map-topic-nav-item.active {
-  background: #1a1a1a;
-  color: #fff;
+.map-filter-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
 }
 
-.map-topic-nav-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+.map-filter-toggle-track {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: #ddd;
   flex-shrink: 0;
+  transition: background 0.15s ease;
 }
 
-.map-topic-nav-tree {
-  list-style: none;
-  margin: 0.3rem 0 0;
-  padding: 0;
+.map-filter-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease;
 }
 
-.map-topic-nav-children {
-  padding-left: 0.75rem;
-  border-left: 1px solid #eee;
-  margin-left: 0.4rem;
+.map-filter-toggle input:checked + .map-filter-toggle-track {
+  background: #2b6cb0;
+}
+
+.map-filter-toggle input:checked + .map-filter-toggle-track::after {
+  transform: translateX(14px);
+}
+
+.map-filter-toggle input:focus-visible + .map-filter-toggle-track {
+  outline: 2px solid #2b6cb0;
+  outline-offset: 2px;
 }
 
 .concept-map {
@@ -1080,39 +1097,13 @@
     flex-direction: column;
   }
 
-  .map-mobile-nav-toggle {
-    display: inline-block;
-    align-self: flex-start;
-    background: #fff;
-    border: 1px solid #ddd;
-    border-radius: 999px;
-    padding: 0.3rem 0.75rem;
-    font-size: 0.8rem;
-    cursor: pointer;
+  .map-filter-bar {
+    gap: 0.5rem;
   }
 
-  .map-topic-nav {
-    display: none;
-  }
-
-  .map-topic-nav.map-topic-nav-mobile-open {
-    display: block;
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 240px;
-    z-index: 20;
-    border-radius: 0;
-    overflow-y: auto;
-  }
-
-  .map-topic-nav-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.5rem;
-    font-weight: 700;
+  .map-filter-select {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .map-mobile-backdrop {

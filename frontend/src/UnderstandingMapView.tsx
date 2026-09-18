@@ -123,14 +123,58 @@ function collectDescendantTopicIds(topics: Topic[], rootId: string): Set<string>
   return result;
 }
 
+// selectedTopicIdが無いときの起点（=「すべて」表示時に階層の深さ0として扱うTopic群）。
+// ルートTopic（parentIdが無いactiveなTopic）を起点にする。
+function getBaseTopicIds(topics: Topic[], selectedTopicId: string | null): string[] {
+  if (selectedTopicId) return [selectedTopicId];
+  return topics.filter((t) => t.status === "active" && !t.parentId).map((t) => t._id);
+}
+
+// baseIdsを深さ0として、maxDepth階層下までのTopic idを集める（maxDepth=nullなら無制限）。
+// 「2階層まで表示」のような深さ制限フィルタのために使う。
+function collectTopicIdsWithinDepth(topics: Topic[], baseIds: string[], maxDepth: number | null): Set<string> {
+  if (maxDepth === null) {
+    const result = new Set<string>();
+    for (const id of baseIds) {
+      for (const descendantId of collectDescendantTopicIds(topics, id)) result.add(descendantId);
+    }
+    return result;
+  }
+
+  const childrenByParent = new Map<string, string[]>();
+  for (const topic of topics) {
+    if (!topic.parentId) continue;
+    const list = childrenByParent.get(topic.parentId);
+    if (list) list.push(topic._id);
+    else childrenByParent.set(topic.parentId, [topic._id]);
+  }
+
+  const result = new Set<string>();
+  let frontier = baseIds.map((id) => ({ id, depth: 0 }));
+  while (frontier.length > 0) {
+    const next: { id: string; depth: number }[] = [];
+    for (const { id, depth } of frontier) {
+      if (result.has(id)) continue;
+      result.add(id);
+      if (depth < maxDepth) {
+        for (const childId of childrenByParent.get(id) ?? []) next.push({ id: childId, depth: depth + 1 });
+      }
+    }
+    frontier = next;
+  }
+  return result;
+}
+
 function getVisibleConcepts(
   activeConcepts: UnderstandingConcept[],
   topics: Topic[],
   selectedTopicId: string | null,
+  maxDepth: number | null,
 ): UnderstandingConcept[] {
-  if (!selectedTopicId) return activeConcepts;
-  const allowed = collectDescendantTopicIds(topics, selectedTopicId);
-  return activeConcepts.filter((c) => c.topicIds.some((id) => allowed.has(id)));
+  const baseIds = getBaseTopicIds(topics, selectedTopicId);
+  const allowed = collectTopicIdsWithinDepth(topics, baseIds, maxDepth);
+  // 未分類（topicIdsが空）のConceptは階層の深さの概念が無いため、常に表示対象にする。
+  return activeConcepts.filter((c) => c.topicIds.length === 0 || c.topicIds.some((id) => allowed.has(id)));
 }
 
 // Conceptに紐づくKnowledgeをconceptIdごとにまとめる（outdatedは詳細一覧からも外す）。
@@ -162,6 +206,28 @@ const CONCEPT_LABEL_MAX_CHARS = 12;
 
 function truncateLabel(text: string, max = CONCEPT_LABEL_MAX_CHARS): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+// ConceptRelationにはまだ「強さ」を表す独立したフィールドが無いため、backendの
+// データモデルは変えずにfrontend側だけの簡易的な基準で「弱いつながり」を判定する。
+// "related"は他のtype（前提/一部/要因/対立/深掘り/更新）と違って意味が限定されない
+// 最も緩やかな関連付けであるため、これだけを「弱いつながり」として扱う。
+function isWeakRelation(type: ConceptRelationType): boolean {
+  return type === "related";
+}
+
+function filterRelationsByStrength(relations: ConceptRelation[], showWeakLinks: boolean): ConceptRelation[] {
+  return showWeakLinks ? relations : relations.filter((r) => !isWeakRelation(r.type));
+}
+
+// トピック選択用の<select>に、階層の深さをインデントで表現しつつ全Topicをフラットに並べる。
+function flattenTopicOptions(nodes: TopicTreeNode[], depth = 0): { id: string; name: string; depth: number }[] {
+  const result: { id: string; name: string; depth: number }[] = [];
+  for (const node of nodes) {
+    result.push({ id: node.id, name: node.name, depth });
+    result.push(...flattenTopicOptions(node.children, depth + 1));
+  }
+  return result;
 }
 
 const RELATION_TYPE_LABEL: Record<ConceptRelationType, string> = {
@@ -277,50 +343,6 @@ function buildTopicBreadcrumb(topics: Topic[], topicId: string): string[] {
   return chain;
 }
 
-function TopicNavTree({
-  nodes,
-  selectedTopicId,
-  onSelect,
-  colorMap,
-  depth = 0,
-}: {
-  nodes: TopicTreeNode[];
-  selectedTopicId: string | null;
-  onSelect: (id: string) => void;
-  colorMap: Map<string, string>;
-  depth?: number;
-}) {
-  return (
-    <ul className="map-topic-nav-tree">
-      {nodes.map((node) => (
-        <li key={node.id}>
-          <button
-            type="button"
-            className={selectedTopicId === node.id ? "map-topic-nav-item active" : "map-topic-nav-item"}
-            onClick={() => onSelect(node.id)}
-          >
-            {depth === 0 && (
-              <span className="map-topic-nav-dot" style={{ background: colorMap.get(node.id) ?? "#ccc" }} />
-            )}
-            {node.name}
-          </button>
-          {node.children.length > 0 && (
-            <div className="map-topic-nav-children">
-              <TopicNavTree
-                nodes={node.children}
-                selectedTopicId={selectedTopicId}
-                onSelect={onSelect}
-                colorMap={colorMap}
-                depth={depth + 1}
-              />
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 function ConceptDetailPanel({
   concept,
   topics,
@@ -414,11 +436,16 @@ export default function UnderstandingMapView({
   const navigate = useNavigate();
   const [mapState, setMapState] = useState<MapFetchState>({ status: "loading" });
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+  // 表示するTopic階層の深さ（選択中Topic、または「すべて」ならルートTopicを深さ0として数える）。
+  // nullは無制限。大きなマップでもクラスタが多すぎて見づらくならないよう、初期値は2階層までにする。
+  const [maxDepth, setMaxDepth] = useState<number | null>(2);
+  // ConceptRelationに強さの区分がまだ無いため、frontend側の簡易基準（isWeakRelation）で
+  // 「弱いつながり」を判定し、既定では非表示にする（つながりが多すぎて見づらくなるのを防ぐ）。
+  const [showWeakLinks, setShowWeakLinks] = useState(false);
   const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState(0);
   const appliedInitialTopicRef = useRef(false);
@@ -464,9 +491,14 @@ export default function UnderstandingMapView({
   const knowledgeByConcept = useMemo(() => countKnowledgeByConcept(knowledge), [knowledge]);
   const topicHierarchy = useMemo(() => buildTopicHierarchy(topics), [topics]);
   const visibleConcepts = useMemo(
-    () => getVisibleConcepts(activeConcepts, topics, selectedTopicId),
-    [activeConcepts, topics, selectedTopicId],
+    () => getVisibleConcepts(activeConcepts, topics, selectedTopicId, maxDepth),
+    [activeConcepts, topics, selectedTopicId, maxDepth],
   );
+  const visibleRelations = useMemo(
+    () => filterRelationsByStrength(relations, showWeakLinks),
+    [relations, showWeakLinks],
+  );
+  const topicOptions = useMemo(() => flattenTopicOptions(topicHierarchy), [topicHierarchy]);
   const visibleIds = useMemo(() => new Set(visibleConcepts.map((c) => c._id)), [visibleConcepts]);
   const allClusterKeys = useMemo(
     () => Array.from(new Set(activeConcepts.map((c) => getClusterKey(c, topics)))),
@@ -528,7 +560,7 @@ export default function UnderstandingMapView({
     }
     for (const concept of visibleConcepts) {
       const knowledgeItems = knowledgeByConcept.get(concept._id) ?? [];
-      const degree = computeConceptDegree(concept._id, knowledgeItems.length, relations);
+      const degree = computeConceptDegree(concept._id, knowledgeItems.length, visibleRelations);
       forceNodes.push({
         id: concept._id,
         kind: "concept",
@@ -552,7 +584,7 @@ export default function UnderstandingMapView({
     const forceLinks: ForceLinkInput[] = [
       ...topicParentLinks.map((l) => ({ ...l, kind: "topicParent" as const })),
       ...topicConceptLinks.map((l) => ({ ...l, kind: "topicConcept" as const })),
-      ...relations
+      ...visibleRelations
         .filter((r) => visibleIds.has(r.fromConceptId) && visibleIds.has(r.toConceptId))
         .map((r) => ({ source: r.fromConceptId, target: r.toConceptId, kind: "conceptRelation" as const })),
     ];
@@ -591,7 +623,7 @@ export default function UnderstandingMapView({
     for (const concept of visibleConcepts) {
       const pos = positions.get(concept._id) ?? { x: 0, y: 0 };
       const knowledgeItems = knowledgeByConcept.get(concept._id) ?? [];
-      const degree = computeConceptDegree(concept._id, knowledgeItems.length, relations);
+      const degree = computeConceptDegree(concept._id, knowledgeItems.length, visibleRelations);
       const clusterKey = getClusterKey(concept, topics);
       const data: ConceptNodeData = {
         name: concept.name,
@@ -608,19 +640,22 @@ export default function UnderstandingMapView({
     }
 
     setNodes(newNodes);
-    setEdges([...buildHierarchyEdges(topicParentLinks, topicConceptLinks), ...buildConceptEdges(relations, visibleIds)]);
+    setEdges([
+      ...buildHierarchyEdges(topicParentLinks, topicConceptLinks),
+      ...buildConceptEdges(visibleRelations, visibleIds),
+    ]);
     setLayoutVersion((v) => v + 1);
   }
 
-  // トリガー①②: データ取得・更新（mapStateの参照が変わる）とTopicフィルタ変更。
-  // eslint的なexhaustive-depsはあえて満たさず、この2つの変化だけを明示的なトリガーにする
+  // トリガー①②: データ取得・更新（mapStateの参照が変わる）とTopic/階層深さ/弱いつながり表示の
+  // フィルタ変更。eslint的なexhaustive-depsはあえて満たさず、この変化だけを明示的なトリガーにする
   // （visibleConcepts等の派生値まで依存に含めると、hoverや詳細パネル開閉のたびに
   // レイアウトが再計算されてしまうため）。
   useEffect(() => {
     if (mapState.status !== "success") return;
     recomputeLayout(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTopicId, mapState]);
+  }, [selectedTopicId, maxDepth, showWeakLinks, mapState]);
 
   // hoverの隣接判定はConceptRelationだけでなく、Topic階層のedge（親子・所属）も含めた
   // 「今画面に引かれているすべてのedge」から求める。これにより、Conceptをhoverすると
@@ -674,7 +709,6 @@ export default function UnderstandingMapView({
 
   function handleSelectTopic(id: string | null) {
     setSelectedTopicId(id);
-    setMobileNavOpen(false);
   }
 
   function handleSelectConcept(id: string) {
@@ -760,39 +794,48 @@ export default function UnderstandingMapView({
       </div>
       {refreshError && <p className="error-message">{refreshError}</p>}
 
-      <div className="understanding-map-layout">
-        <button type="button" className="map-mobile-nav-toggle" onClick={() => setMobileNavOpen(true)}>
-          トピック ☰
-        </button>
+      {/* Topicはツリー表示の左パネルではなく、セレクトボックスで絞り込む形にしている
+          （Topic数が増えても場所を取らず、モバイルでも同じUIで操作できるため）。 */}
+      <div className="map-filter-bar">
+        <select
+          className="map-filter-select"
+          value={selectedTopicId ?? ""}
+          onChange={(e) => handleSelectTopic(e.target.value || null)}
+          aria-label="表示するトピック"
+        >
+          <option value="">すべてのトピック</option>
+          {topicOptions.map((opt) => (
+            <option key={opt.id} value={opt.id}>
+              {"　".repeat(opt.depth)}
+              {opt.name}
+            </option>
+          ))}
+        </select>
 
-        <aside className={mobileNavOpen ? "map-topic-nav map-topic-nav-mobile-open" : "map-topic-nav"}>
-          <div className="map-topic-nav-header">
-            <span>トピック</span>
-            <button
-              type="button"
-              className="modal-close map-mobile-only"
-              onClick={() => setMobileNavOpen(false)}
-              aria-label="閉じる"
-            >
-              ×
-            </button>
-          </div>
-          <button
-            type="button"
-            className={selectedTopicId === null ? "map-topic-nav-item active" : "map-topic-nav-item"}
-            onClick={() => handleSelectTopic(null)}
-          >
-            すべて
-          </button>
-          <TopicNavTree
-            nodes={topicHierarchy}
-            selectedTopicId={selectedTopicId}
-            onSelect={handleSelectTopic}
-            colorMap={topicColorMap}
+        <select
+          className="map-filter-select"
+          value={maxDepth === null ? "all" : String(maxDepth)}
+          onChange={(e) => setMaxDepth(e.target.value === "all" ? null : Number(e.target.value))}
+          aria-label="表示する階層の深さ"
+        >
+          <option value="all">すべての階層を表示</option>
+          <option value="1">1階層まで表示</option>
+          <option value="2">2階層まで表示</option>
+          <option value="3">3階層まで表示</option>
+        </select>
+
+        <label className="map-filter-toggle">
+          <input
+            type="checkbox"
+            checked={showWeakLinks}
+            onChange={(e) => setShowWeakLinks(e.target.checked)}
           />
-        </aside>
-        {mobileNavOpen && <div className="map-mobile-backdrop" onClick={() => setMobileNavOpen(false)} />}
+          <span className="map-filter-toggle-track" aria-hidden="true" />
+          関連の弱いつながりも表示
+        </label>
+      </div>
 
+      <div className="understanding-map-layout">
         <div className="knowledge-map concept-map">
           <ReactFlow
             key={`${selectedTopicId ?? "all"}-${layoutVersion}`}
