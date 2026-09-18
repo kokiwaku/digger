@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getMongoClient } from "./db.js";
 import type { UserKnowledge } from "./llm/personalizedAnalysis.js";
 import type { KnowledgeRelation } from "./llm/knowledgeExtraction.js";
+import { getKnowledgeTopicService } from "./llm/knowledgeTopicFactory.js";
 
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME ?? "digger";
 const KNOWLEDGE_COLLECTION = "user_knowledge";
@@ -18,6 +19,14 @@ export const FIXED_USER_ID = "local-user";
 // 既存データにstatusが無い場合は"active"として扱う（getEffectiveStatus参照）。
 export const knowledgeStatusSchema = z.enum(["active", "foundational", "merged", "outdated"]);
 export type KnowledgeStatus = z.infer<typeof knowledgeStatusSchema>;
+
+// 「自分の理解」ページのマップビュー用。reinforces/newは対象となる既存Knowledgeを持たないため、
+// ここに保存されるのはextends/supersedesのみ（保存時にbuildRelationsOut()で構築）。
+export const knowledgeRelationOutSchema = z.object({
+  knowledgeId: z.string(),
+  type: z.enum(["extends", "supersedes"]),
+});
+export type KnowledgeRelationOut = z.infer<typeof knowledgeRelationOutSchema>;
 
 export const knowledgeDocumentSchema = z.object({
   _id: z.instanceof(ObjectId).optional(),
@@ -36,6 +45,13 @@ export const knowledgeDocumentSchema = z.object({
   // Knowledge Extraction時にrelationToExistingが既存Knowledgeを指していた場合、その_idを記録する。
   // 今回はここに記録するだけで、自動統合（merged/outdatedへの変更等）は行わない。
   relatedKnowledgeIds: z.array(z.string()).optional(),
+  // マップビューの辺（edge）用。relatedKnowledgeIdsと同じタイミングで設定されるが、
+  // relation種別（extends/supersedes）も保持する。
+  relationsOut: z.array(knowledgeRelationOutSchema).optional(),
+  // 「自分の理解」ページのトピックビュー用。1〜3階層のパス（例:["経済","金融政策","政策金利"]）。
+  // 未分類の既存ドキュメントとの後方互換性のためoptional（getUserKnowledgeWithTopics()が
+  // 一覧取得時に未分類分だけ遅延分類してこのフィールドを埋める）。
+  topicPath: z.array(z.string()).min(1).max(3).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -93,6 +109,14 @@ export function buildRelatedKnowledgeIds(relationToExisting?: RelationToExisting
   return relationToExisting?.knowledgeId ? [relationToExisting.knowledgeId] : undefined;
 }
 
+// マップビューの辺として保持する関係。new/reinforcesは対象Knowledgeを持たない
+// （reinforcesはそもそも保存されない）ため、extends/supersedesのみを対象にする。
+export function buildRelationsOut(relationToExisting?: RelationToExistingInput): KnowledgeRelationOut[] | undefined {
+  if (!relationToExisting?.knowledgeId) return undefined;
+  if (relationToExisting.type !== "extends" && relationToExisting.type !== "supersedes") return undefined;
+  return [{ knowledgeId: relationToExisting.knowledgeId, type: relationToExisting.type }];
+}
+
 function getCollection() {
   return getMongoClient()
     .db(MONGODB_DB_NAME)
@@ -141,6 +165,7 @@ export async function saveMultipleKnowledge(
 
     const now = new Date();
     const relatedKnowledgeIds = buildRelatedKnowledgeIds(input.relationToExisting);
+    const relationsOut = buildRelationsOut(input.relationToExisting);
     const doc: Omit<KnowledgeDocument, "_id"> = {
       userId,
       concept: input.concept,
@@ -150,6 +175,8 @@ export async function saveMultipleKnowledge(
       status: "active",
       source: input.source,
       ...(relatedKnowledgeIds ? { relatedKnowledgeIds } : {}),
+      ...(relationsOut ? { relationsOut } : {}),
+      // topicPathはここでは付与しない（一覧取得時にまとめて遅延分類する。assignTopicsToUnclassified参照）。
       createdAt: now,
       updatedAt: now,
     };
@@ -171,4 +198,50 @@ export async function getUserKnowledge(userId: string = FIXED_USER_ID): Promise<
 export async function getKnowledgeForDeepDive(userId: string = FIXED_USER_ID): Promise<KnowledgeDocument[]> {
   const all = await getUserKnowledge(userId);
   return all.filter(isEligibleForDeepDive);
+}
+
+// topicPathが未設定のKnowledgeだけをまとめて1回のLLM呼び出しで分類し、DBへ書き戻す
+// （「毎回全KnowledgeをLLMへ送る」ことを避けるための遅延分類。一度分類されたKnowledgeは
+// 次回以降このLLM呼び出し自体が発生しない）。分類に失敗しても例外を投げず、
+// 未分類のまま（トピックビューでは「未分類」扱い）で一覧取得自体は継続できるようにする。
+export async function assignTopicsToUnclassified(userId: string = FIXED_USER_ID): Promise<void> {
+  const collection = getCollection();
+  const unclassified = await collection.find({ userId, topicPath: { $exists: false } }).toArray();
+  if (unclassified.length === 0) return;
+
+  try {
+    const classified = await collection.find({ userId, topicPath: { $exists: true } }).toArray();
+    const existingTopicPaths = classified
+      .map((doc) => doc.topicPath)
+      .filter((path): path is string[] => Array.isArray(path) && path.length > 0);
+    // 重複するpathを除いてprompt/コストを抑える。
+    const uniqueExistingTopicPaths = Array.from(
+      new Map(existingTopicPaths.map((path) => [path.join(" > "), path])).values(),
+    );
+
+    const service = getKnowledgeTopicService();
+    const result = await service.classify({
+      items: unclassified
+        .filter((doc) => doc._id)
+        .map((doc) => ({ id: doc._id!.toHexString(), concept: doc.concept, statement: doc.statement })),
+      existingTopicPaths: uniqueExistingTopicPaths,
+    });
+
+    const pathById = new Map(result.assignments.map((a) => [a.id, a.path]));
+
+    for (const doc of unclassified) {
+      if (!doc._id) continue;
+      const path = pathById.get(doc._id.toHexString());
+      if (!path) continue;
+      await collection.updateOne({ _id: doc._id }, { $set: { topicPath: path, updatedAt: new Date() } });
+    }
+  } catch (err) {
+    console.error("[knowledge] failed to assign topics to unclassified knowledge, continuing without it", err);
+  }
+}
+
+// 「自分の理解」ページ（GET /api/knowledge）から呼ぶ、topic分類込みの一覧取得。
+export async function getUserKnowledgeWithTopics(userId: string = FIXED_USER_ID): Promise<KnowledgeDocument[]> {
+  await assignTopicsToUnclassified(userId);
+  return getUserKnowledge(userId);
 }

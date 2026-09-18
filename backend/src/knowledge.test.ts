@@ -6,6 +6,7 @@ import {
   isEligibleForDeepDive,
   shouldSkipAsReinforcement,
   buildRelatedKnowledgeIds,
+  buildRelationsOut,
   knowledgeDocumentSchema,
 } from "./knowledge.js";
 
@@ -101,4 +102,77 @@ test("knowledgeDocumentSchema accepts a document with status and relatedKnowledg
   const parsed = knowledgeDocumentSchema.parse(doc);
   assert.equal(parsed.status, "active");
   assert.deepEqual(parsed.relatedKnowledgeIds, ["existing-id-1"]);
+});
+
+test("buildRelationsOut builds a single-entry edge for extends", () => {
+  const result = buildRelationsOut({ type: "extends", knowledgeId: "existing-1" });
+  assert.deepEqual(result, [{ knowledgeId: "existing-1", type: "extends" }]);
+});
+
+test("buildRelationsOut builds a single-entry edge for supersedes", () => {
+  const result = buildRelationsOut({ type: "supersedes", knowledgeId: "existing-1" });
+  assert.deepEqual(result, [{ knowledgeId: "existing-1", type: "supersedes" }]);
+});
+
+test("buildRelationsOut returns undefined for new/reinforces (no graph edge)", () => {
+  assert.equal(buildRelationsOut({ type: "new" }), undefined);
+  assert.equal(buildRelationsOut({ type: "reinforces", knowledgeId: "existing-1" }), undefined);
+  assert.equal(buildRelationsOut(undefined), undefined);
+});
+
+test("buildRelationsOut returns undefined when relationToExisting has no knowledgeId", () => {
+  assert.equal(buildRelationsOut({ type: "extends" }), undefined);
+});
+
+test("knowledgeDocumentSchema accepts a document with relationsOut and topicPath", () => {
+  const doc = {
+    userId: "local-user",
+    concept: "波及メカニズム",
+    statement: "政策金利の波及は複数の要因で決まる",
+    evidence: "根拠",
+    confidence: "high" as const,
+    status: "active" as const,
+    source: { type: "web_article" as const, url: "https://example.com", title: "記事" },
+    relationsOut: [{ knowledgeId: "existing-1", type: "extends" as const }],
+    topicPath: ["経済", "金融政策", "政策金利"],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const parsed = knowledgeDocumentSchema.parse(doc);
+  assert.deepEqual(parsed.relationsOut, [{ knowledgeId: "existing-1", type: "extends" }]);
+  assert.deepEqual(parsed.topicPath, ["経済", "金融政策", "政策金利"]);
+});
+
+test("knowledgeDocumentSchema rejects a topicPath deeper than 3 levels", () => {
+  assert.throws(() =>
+    knowledgeDocumentSchema.parse({
+      userId: "local-user",
+      concept: "a",
+      statement: "sa",
+      evidence: "ea",
+      confidence: "high" as const,
+      source: { type: "web_article" as const, url: "https://example.com", title: "記事" },
+      topicPath: ["1", "2", "3", "4"],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }),
+  );
+});
+
+test("knowledgeDocumentSchema still accepts a legacy document without relationsOut/topicPath", () => {
+  const legacyDoc = {
+    userId: "local-user",
+    concept: "a",
+    statement: "sa",
+    evidence: "ea",
+    confidence: "high" as const,
+    source: { type: "web_article" as const, url: "https://example.com", title: "記事" },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const parsed = knowledgeDocumentSchema.parse(legacyDoc);
+  assert.equal(parsed.relationsOut, undefined);
+  assert.equal(parsed.topicPath, undefined);
 });

@@ -133,7 +133,17 @@ Content-Type: application/json
 - 保存済みKnowledgeと（`concept`完全一致 + `statement`正規化後一致で）重複するものは無条件に保存せず、スキップします（Embedding等の高度な類似度判定はMVPのスコープ外）。
 - 保存完了後は画面遷移せず、チャット画面上に「新しい理解を1件保存しました」「理解が2件深まりました」のような、relationに応じた小さなフィードバックを表示します。
 - **現時点では認証未実装のため、すべてのKnowledgeは固定ユーザー（`local-user`）に紐づきます**。
-- Knowledge Extractionは`LLM_PROVIDER=vertex`のときArticle Analysisと同じパターンでVertex AI Geminiに実接続されます（詳細は[`backend/README.md`](backend/README.md)を参照）。保存済みKnowledgeは、タグライン直下の「保存済みの理解を見る（テスト表示）」から動作確認用の暫定的な一覧表示のみ可能です（きちんとした一覧UIは未実装）。
+- Knowledge Extractionは`LLM_PROVIDER=vertex`のときArticle Analysisと同じパターンでVertex AI Geminiに実接続されます（詳細は[`backend/README.md`](backend/README.md)を参照）。保存済みKnowledgeは、下記の「自分の理解」ページから確認できます。
+
+## 自分の理解ページ
+
+蓄積したKnowledgeをフラットな一覧としてではなく、「最近わかったこと」「トピックごとの広がり」「Knowledge同士のつながり」の3つの見方で眺められるページです。ヘッダーの「掘る」タブと並ぶ「自分の理解」タブから切り替えられます（`frontend/src/App.tsx`の`view`ステートによる単純な画面切り替えで、ルーティングライブラリは使っていません）。
+
+- **最近タブ**: 保存済みKnowledgeを`createdAt`の新しい順に「今日」「昨日」などの日付でグルーピングして表示します。各カードをクリックすると、概念・説明・理解した日・状態・元の記事・関連する理解をモーダルで確認できます（既存のKnowledgeスキーマにあるデータのみを表示し、新しいデータは作っていません）。
+- **トピックタブ**: 各Knowledgeが持つ`topicPath`（最大3階層のトピックの配列、例: `["経済", "金融政策", "政策金利"]`）をもとに、テーマ別の階層ツリーとして表示します。`topicPath`が未付与のKnowledgeは`GET /api/knowledge`が呼ばれたタイミングでバックエンドがまとめてLLM（Vertex AI Gemini。詳細は[`backend/README.md`](backend/README.md)を参照）に分類させ、以後はDBに保存された値を使い回します（毎回全件を送り直すことはありません）。
+- **マップタブ**: Knowledge同士の関係（`extends`＝深掘り、`supersedes`＝更新）をノードと辺のグラフとして表示します（[reactflow](https://reactflow.dev/)を使用）。単なる可視化のデモに見えないよう、トピック（`topicPath`の1階層目）ごとにノードを近くにまとめて配置し、色分け・トピックでの絞り込み・トピックビューからの「この分野をマップで見る」導線・「今週N件の理解が増えました」のような小さな成長指標を添えています。ノードをドラッグしたり、ズーム・パンしたりでき、ノードをクリックすると最近タブと同じ詳細モーダルが開きます。位置の保存や物理シミュレーションによる自動レイアウトなど高度な機能は今回のスコープ外です。
+- **状態による見え方**: `status: outdated`のKnowledgeはマップに表示せず、`merged`/`outdated`は一覧上で少し薄く表示します（詳細はモーダルから確認可能）。
+- Knowledgeが0件のときは、通常のからっぽな管理画面のようにならないよう、モールのキャラクターと「まだ理解マップは小さいです。気になる記事を掘ると、ここにあなたの理解が少しずつ育っていきます。」という案内文、「記事を掘る」ボタンを表示します。
 
 ### 記事取得ポリシー
 
@@ -163,7 +173,7 @@ docker compose up --build
   - `GET /api/health/db` — Hono → MongoDB の接続確認
   - `POST /api/dig` — URLを受け取り、記事解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
   - `POST /api/deep-dive` — 解析結果と質問を受け取り、深掘りの回答を返す（[深掘り対話機能](#深掘り対話機能)を参照）
-  - `POST /api/knowledge/extract` / `POST /api/knowledge/save` / `GET /api/knowledge` — 深掘り会話から理解の候補を抽出し、ユーザーが選んだものだけをMongoDBへ保存する（[理解の蓄積（Knowledge Extraction）](#理解の蓄積knowledge-extraction)を参照）
+  - `POST /api/knowledge/extract` / `POST /api/knowledge/save` / `GET /api/knowledge` — 深掘り会話から理解の候補を抽出し、ユーザーが選んだものだけをMongoDBへ保存する（[理解の蓄積（Knowledge Extraction）](#理解の蓄積knowledge-extraction)を参照）。`GET /api/knowledge`は[自分の理解ページ](#自分の理解ページ)からも利用され、未分類のKnowledgeへのトピック付与もこの呼び出しの中で行われます
   - `POST /api/llm/test` — 開発用のLLM疎通確認API。詳細は [`backend/README.md`](backend/README.md#vertex-ai-gemini-のセットアップ) を参照
 - MongoDB: `mongodb://localhost:27017`（ホストからも接続可能）
 
@@ -236,11 +246,10 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出、Article Analysis・Deep Dive・Knowledge ExtractionのVertex AI（Gemini）実LLM化、「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化、保存済みKnowledgeのDeep Diveでの再利用、Knowledgeの理解状態（`status`）・既存Knowledgeとの関係（`relationToExisting`）の判定は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、Article Analysis・Deep Dive・Knowledge ExtractionのVertex AI（Gemini）実LLM化、「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化、保存済みKnowledgeのDeep Diveでの再利用、Knowledgeの理解状態（`status`）・既存Knowledgeとの関係（`relationToExisting`）の判定、[自分の理解ページ](#自分の理解ページ)（最近／トピック／マップの3ビュー）は実装済みですが、以下は未実装・未設計です。
 
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線（型・モックは実装済み）
 - Deep Diveの会話履歴の要約（現状は直近20件を単純に切り詰めるだけ）
-- 保存済みKnowledgeのきちんとした一覧UI（現状は動作確認用の暫定的なテスト表示のみ）
 - Knowledge Extractionの重複判定を、文字列の正規化一致からEmbedding/Vector Searchベースの意味的な類似度判定に強化する
 - **Knowledgeの自動統合**: `relationToExisting`（`extends`/`supersedes`）を使って、既存Knowledgeを実際に`merged`/`outdated`へ遷移させたり書き換えたりする処理（今回は判定・記録のみ）
 - **`active`→`foundational`への自動昇格**（「十分理解された」Knowledgeを暗黙の前提として扱う仕組み。`status`フィールド自体は用意済み）

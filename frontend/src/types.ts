@@ -76,11 +76,28 @@ export type KnowledgeCandidate = {
   relatedKnowledge?: { concept: string; statement: string };
 };
 
+export type KnowledgeStatus = "active" | "foundational" | "merged" | "outdated";
+
+// マップビューの辺（edge）用。reinforces/newは対象Knowledgeを持たないため、
+// 保存されるのはextends/supersedesのみ。
+export type KnowledgeRelationOut = {
+  knowledgeId: string;
+  type: "extends" | "supersedes";
+};
+
 export type SavedKnowledge = {
   _id: string;
   concept: string;
   statement: string;
   confidence: "low" | "medium" | "high";
+  // 未設定の既存データはbackend側でactive扱いされるが、frontendには生の値がそのまま届く
+  // ことがあるため、表示側でも「未設定ならactive」という前提でstatusを解釈する。
+  status?: KnowledgeStatus;
   source: DigSource;
+  relatedKnowledgeIds?: string[];
+  relationsOut?: KnowledgeRelationOut[];
+  // 「自分の理解」ページのトピックビュー用。1〜3階層のパス。未分類の場合は省略される。
+  topicPath?: string[];
   createdAt: string;
+  updatedAt?: string;
 };

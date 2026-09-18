@@ -17,9 +17,10 @@ frontend/
 │           └── mole-note-1.png〜4.png      # Knowledge Extraction用「ノートに書き込むモグラ」の静止フレーム（NoteMoleLoaderがsetIntervalで順番に切り替え）
 ├── src/
 │   ├── main.tsx      # Reactのエントリーポイント（createRoot）
-│   ├── App.tsx        # アプリ本体。URL入力〜「掘る」結果表示のUI
-│   ├── App.css          # App.tsx のスタイル
-│   ├── types.ts          # /api/dig のリクエスト/レスポンス型
+│   ├── App.tsx        # アプリ本体。URL入力〜「掘る」結果表示のUIと、ヘッダーナビゲーション
+│   ├── UnderstandingPage.tsx  # 「自分の理解」ページ（最近/トピック/マップの3ビュー、Knowledge詳細モーダル）
+│   ├── App.css          # App.tsx・UnderstandingPage.tsx共通のスタイル
+│   ├── types.ts          # /api/dig 等のリクエスト/レスポンス型
 │   └── vite-env.d.ts   # Vite用の型定義（import.meta.env等）
 ├── Dockerfile
 ├── vite.config.ts
@@ -55,6 +56,7 @@ flowchart TD
 - **`App.tsx`**:
   - タイトル「Digger」の左に`brand-icon`としてモグラのアイコン（`public/assets/frames/mole-icon.png`）を表示します（`alt=""` + `aria-hidden="true"`で装飾画像として扱い、スクリーンリーダーには読み上げさせません）。`mole-icon.png`は`mole-dig-1.png`（512x512、MoleLoaderの静止フレームと共用の元画像）から、透明ピクセルの外接矩形で切り抜いた上でその向きに合わせた最小限の余白のみを残したものです。元画像はキャラクター周囲の透明な余白が大きく、そのまま40px前後の小サイズで縮小表示するとキャラクターが小さく見えすぎる問題があったため、このアイコン専用に切り抜き直しました（`MoleLoader`側は96px/72pxと表示サイズが大きいため`mole-dig-1.png`のままで問題なく、変更していません）。ファビコンの3ファイルも同じ`mole-icon.png`から生成しています。
   - `API_BASE_URL` は `import.meta.env.VITE_API_BASE_URL`（未設定時は `http://localhost:8787` にフォールバック）。
+  - **ヘッダーナビゲーション**: タグライン下に「掘る」「自分の理解」の2つのリンクを置き、`view`（`"dig" | "understanding"`）というstateだけで表示を切り替えます。大規模なNavigation設計・URLルーティング（react-router等）は導入せず、単純な条件分岐で十分としています（`view`はブラウザのURLには反映されないため、リロードすると常に「掘る」に戻ります）。
   - フォームでURLを入力し「掘る」を押すと `digUrl()` が `POST /api/dig` を呼び出します。バックエンドが実際にURLへアクセスして抽出した`title`と、Article Analysis（backendの`LLM_PROVIDER`に応じてモックまたはVertex AI Geminiによる実解析）の結果が表示されます。ローディング中は`MoleLoader`コンポーネント（後述）が「記事を掘っています…」と表示します。
   - 状態は `DigState`（`idle` / `loading` / `error` / `success`）という判別可能なユニオン型1つで管理し、状態管理ライブラリは使わず `useState` のみです。
   - **情報カード中心から会話中心へ**: Diggerの差別化は「大量のカードや機能を見せること」ではなく「今読んでいる記事を理解している」「会話から理解を深める」という裏側の体験にある、という方針のもと、表側のUIは`hasStartedChat`（`messages.length > 0`から導出。stateとしては持たない）を境に2つの画面に分かれます。**ArticleAnalysisのデータ自体・`DeepDiveInput`/`DeepDiveResponse`の型は変更していません**（表側は簡素化、裏側に渡すコンテキストは従来通り豊富なまま）。
@@ -73,11 +75,24 @@ flowchart TD
       - 選択状態は`Set<string>`（`knowledgeSelectedIds`、候補の`id`をキーにする。グルーピング表示に伴い、配列インデックスではなく`id`で管理する方が安全なため）で管理し、1件以上選ぶと「保存する」ボタンが有効になります。**AIは自動保存しません**。`evidence`・`relationToExisting.reason`・紐付け先の`knowledgeId`はUIには常時表示しません（内部的な判断材料として保持するのみ）。
     - 保存を押すと`handleSaveSelectedKnowledge()`が`saveKnowledge()`（`POST /api/knowledge/save`）を呼び、選択された候補（`id`を含む、`/api/knowledge/extract`のレスポンスをそのまま利用）を送ります。保存後のフィードバックは単純な「N件保存しました」だけでなく、`describeSaveResult()`が選択した候補の`displayCategory`の内訳から「新しい理解を1件保存しました。理解が2件深まりました。」のようなrelationに応じた文言を組み立てます（実際の保存件数と多少ずれる可能性がある簡易な実装で、backendが重複等でスキップした件数があれば「（M件は既に保存済みのためスキップしました）」も併記）。画面遷移はせず、パネルを閉じてチャット画面上に小さく表示し、4秒後に自動的に消えます。状態は`KnowledgeSaveState`（`idle`/`extracting`/`extracted`/`saving`/`saved`/`error`）という1つの判別可能なユニオン型で管理します。
     - 保存失敗時は`error-message`で`error`メッセージを表示するのみで、チャット自体やそれまでの会話状態は壊れません（`knowledgeSaveState`は独立したstateのため）。
-  - **「保存済みの理解を見る（テスト表示）」**: `GET /api/knowledge`で保存済みのKnowledge全件を取得し、確認できるようにするための**暫定的な動作確認用UI**です（`showKnowledgeList`/`knowledgeListState`という、記事の解析やチャットの状態とは完全に独立したstateで管理）。タグライン直下（記事を掘る前でもクリック可能）に控えめな`link-button`として置かれ、押すたびに一覧を取得し直します（キャッシュしません）。パネルはオレンジ系の破線枠（`.knowledge-list-panel`）で他のUIと視覚的に区別しており、各項目は`concept`/`statement`/`confidence`/保存日時/出典記事へのリンクのみを並べる簡素な表示です（編集・削除・ページネーションなし）。**恒久的な一覧UIではなく、Knowledge Extraction機能の動作確認のための一時的な実装として追加したもので、将来的にきちんとした一覧UIに置き換えるか削除する想定です。**
   - エラー時はバックエンドが返した `error` メッセージ、またはネットワークエラーの内容を表示します（`400`/`403`/`422`/`502`いずれも同じ見た目で表示、種別による出し分けは未実装）。
   - **`MoleLoader`（掘るモグラのローディング表示）**: 通常のspinnerの代わりに、Diggerのキャラクター（スコップで掘るモグラ）のGIFアニメーションを表示するコンポーネントです。`public/assets/digger-mole-dig.gif`（96px、モバイルは72px。`@media (max-width: 480px)`で切り替え）とラベル文言を横並びで表示するだけの軽量な実装で、画面全体を覆うオーバーレイにはせず、処理中のセクション内に自然に差し込みます。3箇所で使用: ①`digUrl()`実行中（「記事を掘っています…」）、②Pre-chat Primary Viewでの初回Deep Dive送信中、③Chat Viewでの2回目以降のDeep Dive送信中（②③とも「もう少し掘っています…」、`deepDiveState.status === "loading"`から表示）。`usePrefersReducedMotion()`という小さなフックが`window.matchMedia("(prefers-reduced-motion: reduce)")`を監視し、有効な環境ではGIFの代わりに静止フレーム`public/assets/frames/mole-dig-1.png`を表示します。エラー時・完了時はstateが`loading`から外れるため、既存のローディング分岐の仕組みに乗る形でDOMから自動的に消えます（表示/非表示のロジック自体は変更していません）。
   - **`NoteMoleLoader`（ノートに書き込んで整理しているモグラのローディング表示）**: Knowledge Extraction専用のローディング表示で、`knowledgeSaveState.status === "extracting"`（`handleExtractKnowledge()`が`POST /api/knowledge/extract`のレスポンス待ちをしている間）にのみ表示されます。`MoleLoader`とは素材（GIF vs 静止PNG4枚）が異なるため別コンポーネントにしていますが、見た目・DOM構造は共通の`.mole-loader`/`.mole-loader-image`/`.mole-loader-label`クラスを再利用しており、サイズ（96px/72px）も`MoleLoader`と同じです。GIFを持たないため、`public/assets/frames/mole-note-1.png`〜`mole-note-4.png`という4枚の静止フレームを`setInterval`（`NOTE_FRAME_INTERVAL_MS = 350ms`）で単純に順番切り替えする方式（GIF化やスプライトシート化は行わず、新規ライブラリも導入していません）。`usePrefersReducedMotion()`が有効な場合はタイマー自体を起動せず、常に1枚目（`mole-note-1.png`）だけを表示します（`alt="Diggerがわかったことを整理しています"`）。`knowledgeSaveState`が`extracting`から`extracted`/`error`のいずれかに遷移した時点でコンポーネントごとアンマウントされ、`setInterval`は`useEffect`のクリーンアップで確実に解除されるため、成功時・失敗時ともにローディングが残り続けることはありません。ラベル文言（`label`プロップ）は呼び出し側で自由に変えられるため、将来`/api/knowledge/save`の保存中表示にも同じコンポーネントをそのまま再利用できます（今回はKnowledge Extractionの抽出中のみで使用）。
-- **`types.ts`**: `/api/dig`・`/api/deep-dive`・`/api/knowledge/extract`・`GET /api/knowledge` のレスポンス型（`DigResult` / `DigSource` / `ArticleAnalysis` / `Concept` / `Entity` / `Connection` / `ConversationTurn` / `DeepDiveResponse` / `KnowledgeCandidate` / `SavedKnowledge`）を定義。backend側の `src/types.ts`・`src/llm/*.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。チャットUI用の`ChatMessage`型（`App.tsx`内のローカル型）は`{ role, content }`のみを持ち、`suggestedFollowUps`は保持しません（UIで使わないため）。
+- **`UnderstandingPage.tsx`**: 「自分の理解」ページ。保存済みKnowledgeを「一覧」ではなく「自分の理解が育っている」と感じられる形で見せることを目的にした画面で、独立したファイルに分離しています（`App.tsx`が既に大きいため）。マウント時に`fetchSavedKnowledge()`（`GET /api/knowledge`）を1回呼び、以降はタブ切り替えのみで同じデータを使い回します（タブごとに再取得しません）。
+  - **タブ**: 「最近」「トピック」「マップ」の3つを`understanding-tab`ボタンで切り替えるだけの単純なUIです（`UnderstandingTab`型のstate）。
+  - **「最近」ビュー**: `groupByDate()`が、backendが`createdAt`降順で返す配列を前提に、連続する同じ日付（今日/昨日/それ以外は「9月17日」のような表示）の項目をまとめてグルーピングします。各行（`KnowledgeRow`）は`concept`・`statement`の冒頭・出典記事タイトルを表示し、`status`が`active`以外の場合だけ控えめなバッジ（`understanding-item-status`）を添えます。クリックするとKnowledge詳細モーダルが開きます。
+  - **「トピック」ビュー**: `buildTopicTree()`が、各Knowledgeの`topicPath`（backendが付与する1〜3階層のパス。無ければ「未分類」）から、共通の接頭辞をまとめた木構造を組み立て、`TopicTree`コンポーネントが再帰的に描画します。正規化されたTopicコレクションではなく、`topicPath: string[]`をそのままグルーピングに使う単純な実装です。
+  - **「マップ」ビュー（`KnowledgeMap`）**: [`reactflow`](https://reactflow.dev/)（v11）を使い、Knowledgeをnode、`relationsOut`（`extends`/`supersedes`）を辺として描画します。ライブラリ選定は「既存依存関係との相性」と「drag/zoom/pan・カスタムnodeクリックが標準で揃っている」ことを優先し、Cytoscape.js（非Reactでラッパーが必要）やD3-force（物理シミュレーション・SVG描画を自前実装する必要がある）より導入コストが低いと判断しました。当初は「グラフを表示しただけ」の機能デモ的な見た目だったため、以下の点を強化し「自分の理解の地図」に近づけています。
+    - **トピックごとのクラスタ配置（`layoutNodesByTopic()`）**: 力学シミュレーション等の専用ライブラリは導入せず、`topicPath`の1階層目（トップレベルトピック）ごとにnodeをグルーピングし、トピックの中心点を外周円上に配置、その周りに同じトピックのKnowledgeを小さな円で固める単純な二重円レイアウトにしています。これにより、明示的な`relationsOut`が無いKnowledge同士でも「同じ意味領域は近くに見える」形になり、孤立nodeだらけの見た目を避けています。各クラスタの中心にはドラッグ・クリック不可の背景的なトピック名ラベルnode（`id`が`topic-label-`始まり）を置いています。
+    - **node labelの短縮**: node上のlabelは`concept`を`truncateLabel()`で最大14文字に短縮して表示し（超過分は`…`）、フルテキストはブラウザネイティブの`title`属性（ホバー）と、クリック後のKnowledge詳細モーダルで確認できます。俯瞰用のマップと詳細確認用のモーダルとで役割を分けています。
+    - **トピックによる色分けとフィルタ（`TopicFilterChips`）**: トップレベルトピックごとに固定パレットから色を割り当て（`buildTopicColorMap()`。出現順に割り当てるため同じデータなら毎回同じ色になります）、nodeの枠線色・クラスタラベル色に使います。マップ上部の「すべて」「トピック名」チップでクリックした1トピックだけに絞り込めます（`activeTopic` state）。
+    - **トピックビューからの導線**: 「トピック」ビューの各トップレベルトピック見出しに「この分野をマップで見る →」リンクを追加し、押すと「マップ」タブへ切り替えつつ同じトピックでの絞り込みを自動適用します（`goToMapFilteredByTopic()`）。トピックとマップが別々の画面という感覚を避けるための導線です。
+    - **成長を伝える小さな指標（`computeGrowthStats()`）**: マップ上部に「今週N件の理解が増えました・M個のトピックでつながりが生まれています」という一言を表示します。新しいフィールドは追加せず、既存の`createdAt`（直近7日以内の件数）と`relationsOut`（同じトップレベルトピック内で辺が存在するトピックの数）だけから計算しています。
+    - フィルタでnode集合が変わったときも見やすい位置にfit-viewし直すため、`<ReactFlow key={activeTopic ?? "all"}>`としてトピック切り替え時に再マウントしています（reactflowの`fitView`propは初回マウント時にしか効かないため）。
+    - node位置はドラッグで自由に動かせますが、位置の永続化は行いません。`status: "outdated"`のKnowledgeはマップから除外し、`merged`/`outdated`のnodeは薄い色で描画します。nodeクリックでKnowledge詳細モーダルを開きます。
+  - **Knowledge詳細（`KnowledgeDetailModal`）**: 固定オーバーレイの簡易モーダルで、`concept`・`statement`・`理解した日`（`createdAt`）・`状態`（`status`を`STATUS_LABELS`で日本語化）・`元の記事`（`source.title`へのリンク）・（`relationsOut`があれば）`関連する理解`（参照先Knowledgeの`concept`を`allItems`から逆引き）を表示します。現在のKnowledge schemaで取得できる情報だけを使い、存在しないデータは表示しません。
+  - **Empty State**: Knowledgeが0件の場合はタブ自体を表示せず、モグラのアイコンと「まだ理解マップは小さいです。気になる記事を掘ると、ここにあなたの理解が少しずつ育っていきます。」という一言、「記事を掘る」ボタン（`onGoDig`経由で`App.tsx`の`view`を`"dig"`に戻す）だけを表示します。
+- **`types.ts`**: `/api/dig`・`/api/deep-dive`・`/api/knowledge/extract`・`GET /api/knowledge` のレスポンス型（`DigResult` / `DigSource` / `ArticleAnalysis` / `Concept` / `Entity` / `Connection` / `ConversationTurn` / `DeepDiveResponse` / `KnowledgeCandidate` / `SavedKnowledge` / `KnowledgeRelationOut`）を定義。backend側の `src/types.ts`・`src/llm/*.ts` と同じ形を手動で同期しています（共有パッケージ化はまだしていません）。チャットUI用の`ChatMessage`型（`App.tsx`内のローカル型）は`{ role, content }`のみを持ち、`suggestedFollowUps`は保持しません（UIで使わないため）。
 - **`App.css`**: 余白の広いシンプルなレイアウト。`flex-wrap` と相対単位でスマホ幅でも崩れないようにしています。CSSフレームワーク等は未導入です。
 
 ## 環境変数（`.env`）
