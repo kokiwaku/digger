@@ -61,6 +61,14 @@ export async function ensureConceptsForKnowledge(userId: string = FIXED_USER_ID)
 // 保存済みKnowledgeのrelationsOutから、対応するConceptRelationを作成する。
 // 参照先Knowledgeが見つからない、あるいはConcept作成/関係作成に失敗しても、
 // 呼び出し元（Knowledge保存フロー）を止めないようbest-effortで扱う。
+//
+// あわせて、Concept/Topic Dig起点のoriginHintと同じ思想で、LLM呼び出しなしのTopic推定も行う:
+// 新しいKnowledgeが既存Knowledgeを「extends/supersedes」している（＝関連が明確）場合、
+// 関連先ConceptがすでにTopic分類済みならそのTopicを継承する。「このKnowledgeは既存の理解と
+// 明確に関係がある」というのはLLMのKnowledge Extraction自体が既に判定済みの情報なので、
+// ここでさらにLLMを呼ばなくても「既存のTopicに近い」と推定できる、という考え方。
+// 単なる`reinforces`（既存と同じConceptの再確認）はfindOrCreateConceptが同一Conceptを
+// 返すため、この関数を通らずとも自動的にtopicIdsを引き継いでいる。
 export async function syncConceptRelationsFromKnowledge(userId: string, savedDoc: KnowledgeDocument): Promise<void> {
   if (!savedDoc.relationsOut || savedDoc.relationsOut.length === 0) return;
 
@@ -80,6 +88,12 @@ export async function syncConceptRelationsFromKnowledge(userId: string, savedDoc
         toConceptId: toId,
         type: mapKnowledgeRelationTypeToConceptRelationType(relation.type),
       });
+
+      if (fromConcept.topicIds.length === 0 && toConcept.topicIds.length > 0) {
+        for (const topicId of toConcept.topicIds) {
+          await addTopicToConcept(userId, fromId, topicId);
+        }
+      }
     } catch (err) {
       console.error("[understandingStructure] failed to sync concept relation, continuing", err);
     }
@@ -124,9 +138,16 @@ export async function linkConceptsForSavedKnowledge(
       await setKnowledgeConceptIds(doc._id.toHexString(), [concept._id!.toHexString()], userId);
       await syncConceptRelationsFromKnowledge(userId, doc);
 
-      if (originTopicIds.length > 0 && concept.topicIds.length === 0 && concept._id) {
-        for (const topicId of originTopicIds) {
-          await addTopicToConcept(userId, concept._id.toHexString(), topicId);
+      // syncConceptRelationsFromKnowledge()が関連Conceptからのtopic推定で既に
+      // topicIdsを埋めている可能性があるため、その結果を踏まえて再取得してから判定する
+      // （関連からの推定 > originHintによる推定、の優先度。両方満たしても実害は無いが
+      // 無駄なDB書き込みを避けるため）。
+      if (originTopicIds.length > 0 && concept._id) {
+        const refreshed = await getConceptById(userId, concept._id.toHexString());
+        if (refreshed && refreshed.topicIds.length === 0) {
+          for (const topicId of originTopicIds) {
+            await addTopicToConcept(userId, concept._id.toHexString(), topicId);
+          }
         }
       }
     } catch (err) {
