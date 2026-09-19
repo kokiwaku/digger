@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import type { ArticleAnalysis, Concept, ConversationTurn, DeepDiveResponse, DigSource, KnowledgeCandidate } from "./types";
+import type {
+  ArticleAnalysis,
+  Concept,
+  ConversationTurn,
+  DeepDiveResponse,
+  DigSource,
+  MemoryCandidate,
+  MemoryDraftItem,
+  MemoryItemType,
+} from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 
@@ -11,10 +20,10 @@ export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 type DeepDiveState = { status: "idle" } | { status: "loading" } | { status: "error"; message: string };
 
-type KnowledgeSaveState =
+type MemorySaveState =
   | { status: "idle" }
   | { status: "extracting" }
-  | { status: "extracted"; candidates: KnowledgeCandidate[] }
+  | { status: "extracted"; items: MemoryDraftItem[] }
   | { status: "saving" }
   | { status: "saved"; message: string }
   | { status: "error"; message: string };
@@ -28,27 +37,48 @@ function firstSentences(text: string, maxSentences: number): string {
   return sentences.slice(0, maxSentences).join("").trim();
 }
 
-// 保存後のフィードバックを「N件保存しました」だけでなく、可能な範囲でrelationに応じた
-// 表現にする（新しくわかったこと/理解が深まったこと/更新したこと）。保存対象を選んだ時点の
-// displayCategoryから算出するだけの簡易な実装（実際の保存件数と多少ずれても許容する）。
-function describeSaveResult(
-  selectedCandidates: KnowledgeCandidate[],
-  savedCount: number,
-  skippedCount: number,
-): string {
-  const counts = { new: 0, deepened: 0, updated: 0 };
-  for (const candidate of selectedCandidates) {
-    counts[candidate.displayCategory]++;
+// typeごとの表示ラベル・グループ表示順。knowledgeを保存対象の先頭に置くのは、
+// 既存のKnowledge Extractionからの自然な連続性のため。
+const TYPE_LABELS: Record<MemoryItemType, string> = {
+  knowledge: "理解したこと",
+  preference: "条件・好み",
+  candidate: "候補",
+  decision: "決めたこと",
+  open_question: "未解決",
+};
+const TYPE_ORDER: MemoryItemType[] = ["knowledge", "preference", "candidate", "decision", "open_question"];
+
+function groupItemsByType(items: MemoryDraftItem[]): Partial<Record<MemoryItemType, MemoryDraftItem[]>> {
+  const groups: Partial<Record<MemoryItemType, MemoryDraftItem[]>> = {};
+  for (const item of items) {
+    (groups[item.type] ??= []).push(item);
+  }
+  return groups;
+}
+
+// 保存後のフィードバックを「N件残しました」だけでなく、type別の内訳も添える。
+// ただし主張しすぎないよう、1行に収まる簡潔な文言にとどめる（#23）。
+function describeSaveResult(selectedItems: MemoryDraftItem[], savedCount: number, skippedCount: number): string {
+  const counts: Partial<Record<MemoryItemType, number>> = {};
+  for (const item of selectedItems) {
+    counts[item.type] = (counts[item.type] ?? 0) + 1;
   }
 
-  const sentences: string[] = [];
-  if (counts.new > 0) sentences.push(`新しい理解を${counts.new}件保存しました。`);
-  if (counts.deepened > 0) sentences.push(`理解が${counts.deepened}件深まりました。`);
-  if (counts.updated > 0) sentences.push(`理解を${counts.updated}件更新しました。`);
+  const parts = TYPE_ORDER.map((type) => {
+    const count = counts[type];
+    return count ? `${TYPE_LABELS[type]} ${count}件` : null;
+  }).filter((part): part is string => part !== null);
 
-  const base = sentences.length > 0 ? sentences.join("") : `${savedCount}件の理解を保存しました。`;
+  const base = parts.length > 0 ? `${savedCount}件残しました（${parts.join("・")}）` : `${savedCount}件残しました`;
   const skipped = skippedCount > 0 ? `（${skippedCount}件は既に保存済みのためスキップしました）` : "";
   return `${base}${skipped}`;
+}
+
+function splitCommaList(text: string): string[] {
+  return text
+    .split(/[、,]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 async function askDeepDive(
@@ -72,12 +102,12 @@ async function askDeepDive(
   return body as DeepDiveResponse;
 }
 
-async function extractKnowledge(
+async function extractMemory(
   source: DigSource,
   articleAnalysis: ArticleAnalysis,
   conversationHistory: ConversationTurn[],
-): Promise<KnowledgeCandidate[]> {
-  const res = await fetch(`${API_BASE_URL}/api/knowledge/extract`, {
+): Promise<MemoryCandidate[]> {
+  const res = await fetch(`${API_BASE_URL}/api/memory/extract`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, articleAnalysis, conversationHistory }),
@@ -93,14 +123,27 @@ async function extractKnowledge(
   return body.candidates ?? [];
 }
 
-async function saveKnowledge(
+async function saveMemory(
   source: DigSource,
-  candidates: KnowledgeCandidate[],
+  items: MemoryDraftItem[],
 ): Promise<{ savedCount: number; skippedCount: number }> {
-  const res = await fetch(`${API_BASE_URL}/api/knowledge/save`, {
+  const res = await fetch(`${API_BASE_URL}/api/memory/save`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, candidates }),
+    body: JSON.stringify({
+      source,
+      items: items.map((item) => ({
+        id: item.id,
+        type: item.type,
+        title: item.title,
+        content: item.content,
+        reason: item.reason,
+        metadata: item.metadata,
+        confidence: item.confidence,
+        origin: item.origin,
+        relationToExisting: item.relationToExisting,
+      })),
+    }),
   });
 
   const body = await res.json().catch(() => null);
@@ -242,112 +285,235 @@ function ConceptDisclosure({ concept }: { concept: Concept }) {
   );
 }
 
-// Diggerは「Knowledgeを増やすこと」ではなく「理解状態がどう変化したか」を見せたい。
-// reinforces相当の候補はbackend側で確認候補一覧から除外済みなので、ここに来る候補は
-// 常にnew/deepened/updatedのいずれか（displayCategory）。カテゴリごとに見出しを分けて表示する。
-const CATEGORY_LABELS: Record<KnowledgeCandidate["displayCategory"], string> = {
-  new: "新しくわかったこと",
-  deepened: "理解が深まったこと",
-  updated: "理解を更新する",
-};
-const CATEGORY_ORDER: KnowledgeCandidate["displayCategory"][] = ["new", "deepened", "updated"];
+// 1件分の編集可能なフィールド。title/contentは全typeで編集可能、metadataはcandidateのみ。
+type MemoryItemPatch = Partial<Pick<MemoryDraftItem, "title" | "content" | "metadata">>;
 
-function groupCandidatesByCategory(
-  candidates: KnowledgeCandidate[],
-): Partial<Record<KnowledgeCandidate["displayCategory"], KnowledgeCandidate[]>> {
-  const groups: Partial<Record<KnowledgeCandidate["displayCategory"], KnowledgeCandidate[]>> = {};
-  for (const candidate of candidates) {
-    (groups[candidate.displayCategory] ??= []).push(candidate);
-  }
-  return groups;
-}
-
-function KnowledgeCandidateItem({
-  candidate,
+function MemoryItemRow({
+  item,
   selected,
   onToggleSelect,
+  onUpdate,
   saving,
 }: {
-  candidate: KnowledgeCandidate;
+  item: MemoryDraftItem;
   selected: boolean;
   onToggleSelect: () => void;
+  onUpdate: (patch: MemoryItemPatch) => void;
   saving: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
+  const showTitleField = item.type === "knowledge" || item.type === "candidate";
+  const hasCandidateMetadata =
+    item.type === "candidate" &&
+    ((item.metadata?.reasons && item.metadata.reasons.length > 0) ||
+      (item.metadata?.concerns && item.metadata.concerns.length > 0));
+
   return (
     <li className="knowledge-item">
       <label className="knowledge-checkbox">
         <input type="checkbox" checked={selected} onChange={onToggleSelect} disabled={saving} />
-        <span className="knowledge-concept">{candidate.concept}</span>
+        <span className="knowledge-concept">{item.title || item.content}</span>
       </label>
 
-      {candidate.displayCategory === "updated" && candidate.relatedKnowledge ? (
-        <div className="knowledge-update-compare">
-          <p className="knowledge-update-line">
-            <span className="knowledge-update-label">以前の理解:</span> {candidate.relatedKnowledge.statement}
-          </p>
-          <p className="knowledge-update-line">
-            <span className="knowledge-update-label">今回の理解:</span> {candidate.statement}
-          </p>
+      {!editing && (
+        <>
+          {item.displayCategory === "updated" && item.relatedKnowledge ? (
+            <div className="knowledge-update-compare">
+              <p className="knowledge-update-line">
+                <span className="knowledge-update-label">以前の理解:</span> {item.relatedKnowledge.statement}
+              </p>
+              <p className="knowledge-update-line">
+                <span className="knowledge-update-label">今回の理解:</span> {item.content}
+              </p>
+            </div>
+          ) : (
+            item.title && item.title !== item.content && <p className="knowledge-statement">{item.content}</p>
+          )}
+
+          {item.displayCategory === "deepened" && item.relatedKnowledge && (
+            <p className="knowledge-relation-hint">
+              以前の「{item.relatedKnowledge.concept}」から理解が深まりました
+            </p>
+          )}
+
+          {hasCandidateMetadata && (
+            <div className="memory-candidate-metadata">
+              {item.metadata?.reasons && item.metadata.reasons.length > 0 && (
+                <p className="memory-candidate-reasons">理由: {item.metadata.reasons.join("・")}</p>
+              )}
+              {item.metadata?.concerns && item.metadata.concerns.length > 0 && (
+                <p className="memory-candidate-concerns">懸念: {item.metadata.concerns.join("・")}</p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {editing ? (
+        <div className="memory-item-edit">
+          {showTitleField && (
+            <input
+              className="memory-edit-input"
+              value={item.title ?? ""}
+              onChange={(e) => onUpdate({ title: e.target.value })}
+              placeholder="タイトル"
+              disabled={saving}
+            />
+          )}
+          <textarea
+            className="memory-edit-textarea"
+            value={item.content}
+            onChange={(e) => onUpdate({ content: e.target.value })}
+            rows={2}
+            disabled={saving}
+          />
+          {item.type === "candidate" && (
+            <>
+              <input
+                className="memory-edit-input"
+                value={item.metadata?.reasons?.join("、") ?? ""}
+                onChange={(e) => onUpdate({ metadata: { ...item.metadata, reasons: splitCommaList(e.target.value) } })}
+                placeholder="理由（読点区切り）"
+                disabled={saving}
+              />
+              <input
+                className="memory-edit-input"
+                value={item.metadata?.concerns?.join("、") ?? ""}
+                onChange={(e) => onUpdate({ metadata: { ...item.metadata, concerns: splitCommaList(e.target.value) } })}
+                placeholder="懸念（読点区切り）"
+                disabled={saving}
+              />
+            </>
+          )}
+          <button type="button" className="link-button" onClick={() => setEditing(false)}>
+            完了
+          </button>
         </div>
       ) : (
-        <p className="knowledge-statement">{candidate.statement}</p>
+        <button type="button" className="link-button memory-edit-toggle" onClick={() => setEditing(true)} disabled={saving}>
+          編集
+        </button>
       )}
 
-      {candidate.displayCategory === "deepened" && candidate.relatedKnowledge && (
-        <p className="knowledge-relation-hint">
-          以前の「{candidate.relatedKnowledge.concept}」から理解が深まりました
-        </p>
-      )}
-
-      <p className="knowledge-confidence">信頼度: {candidate.confidence}</p>
+      {item.confidence && <p className="knowledge-confidence">信頼度: {item.confidence}</p>}
     </li>
   );
 }
 
-function KnowledgeConfirmationPanel({
-  candidates,
-  selectedIds,
-  onToggleSelect,
-  onSave,
-  saving,
+// 保存候補UIに「＋ 自分で追加」を持たせる。AIが出した候補だけに保存内容を限定しない、
+// という方針（#最重要の思想）を満たすための入口。
+function AddOwnItemForm({
+  onAdd,
+  disabled,
 }: {
-  candidates: KnowledgeCandidate[];
-  selectedIds: Set<string>;
-  onToggleSelect: (id: string) => void;
-  onSave: () => void;
-  saving: boolean;
+  onAdd: (type: MemoryItemType, content: string, note: string) => void;
+  disabled: boolean;
 }) {
-  const selectedCount = candidates.filter((c) => selectedIds.has(c.id)).length;
+  const [open, setOpen] = useState(false);
+  const [type, setType] = useState<MemoryItemType>("preference");
+  const [content, setContent] = useState("");
+  const [note, setNote] = useState("");
 
-  if (candidates.length === 0) {
+  if (!open) {
     return (
-      <div className="knowledge-panel">
-        <div className="details-panel">
-          <p className="section-body">今回は新しく保存する内容はありませんでした。</p>
-        </div>
-      </div>
+      <button type="button" className="link-button memory-add-toggle" onClick={() => setOpen(true)} disabled={disabled}>
+        ＋ 自分で追加
+      </button>
     );
   }
 
-  const groups = groupCandidatesByCategory(candidates);
+  return (
+    <div className="memory-add-form">
+      <div className="memory-add-type-picker">
+        {TYPE_ORDER.map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={t === type ? "memory-add-type-button active" : "memory-add-type-button"}
+            onClick={() => setType(t)}
+          >
+            {TYPE_LABELS[t]}
+          </button>
+        ))}
+      </div>
+      <textarea
+        className="memory-edit-textarea"
+        placeholder="内容"
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        rows={2}
+      />
+      <input
+        className="memory-edit-input"
+        placeholder="補足（任意）"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+      />
+      <div className="memory-add-actions">
+        <button
+          type="button"
+          className="dig-button"
+          disabled={!content.trim()}
+          onClick={() => {
+            onAdd(type, content.trim(), note.trim());
+            setContent("");
+            setNote("");
+            setOpen(false);
+          }}
+        >
+          追加
+        </button>
+        <button type="button" className="link-button" onClick={() => setOpen(false)}>
+          キャンセル
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MemoryConfirmationPanel({
+  items,
+  selectedIds,
+  onToggleSelect,
+  onUpdate,
+  onAdd,
+  onSave,
+  saving,
+}: {
+  items: MemoryDraftItem[];
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onUpdate: (id: string, patch: MemoryItemPatch) => void;
+  onAdd: (type: MemoryItemType, content: string, note: string) => void;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  const selectedCount = items.filter((i) => selectedIds.has(i.id)).length;
+  const groups = groupItemsByType(items);
 
   return (
     <div className="knowledge-panel">
       <div className="details-panel">
-        <h3 className="section-label">今回、理解がどう変わったか</h3>
-        {CATEGORY_ORDER.map((category) => {
-          const items = groups[category];
-          if (!items || items.length === 0) return null;
+        <h3 className="section-label">今回残したいこと</h3>
+
+        {items.length === 0 && (
+          <p className="section-body">AIからの候補はありませんでした。気になることがあれば、下から自分で追加できます。</p>
+        )}
+
+        {TYPE_ORDER.map((type) => {
+          const groupItems = groups[type];
+          if (!groupItems || groupItems.length === 0) return null;
           return (
-            <div key={category} className="knowledge-category">
-              <h4 className="knowledge-category-label">{CATEGORY_LABELS[category]}</h4>
+            <div key={type} className="knowledge-category">
+              <h4 className="knowledge-category-label">{TYPE_LABELS[type]}</h4>
               <ul className="card-list">
-                {items.map((candidate) => (
-                  <KnowledgeCandidateItem
-                    key={candidate.id}
-                    candidate={candidate}
-                    selected={selectedIds.has(candidate.id)}
-                    onToggleSelect={() => onToggleSelect(candidate.id)}
+                {groupItems.map((item) => (
+                  <MemoryItemRow
+                    key={item.id}
+                    item={item}
+                    selected={selectedIds.has(item.id)}
+                    onToggleSelect={() => onToggleSelect(item.id)}
+                    onUpdate={(patch) => onUpdate(item.id, patch)}
                     saving={saving}
                   />
                 ))}
@@ -355,6 +521,9 @@ function KnowledgeConfirmationPanel({
             </div>
           );
         })}
+
+        <AddOwnItemForm onAdd={onAdd} disabled={saving} />
+
         {selectedCount > 0 && (
           <button className="dig-button" onClick={onSave} disabled={saving}>
             {saving ? "保存中..." : "保存する"}
@@ -379,8 +548,8 @@ export interface DeepDiveSessionProps {
   introMessage?: string;
   /** 画面上部・headingのすぐ下に追加で表示する要素（例:「理解マップへ戻る」ボタン）。 */
   headerExtra?: ReactNode;
-  /** Knowledge保存が成功した直後に呼ばれる（Understanding Map側の再取得トリガー等に使える）。 */
-  onKnowledgeSaved?: () => void;
+  /** 保存が成功した直後に呼ばれる（Understanding Map側の再取得トリガー等に使える）。 */
+  onMemorySaved?: () => void;
 }
 
 // Deep Dive〜Knowledge Extraction〜保存までの一連のUIをまとめたコンポーネント。
@@ -395,7 +564,7 @@ export default function DeepDiveSession({
   heading,
   introMessage,
   headerExtra,
-  onKnowledgeSaved,
+  onMemorySaved,
 }: DeepDiveSessionProps) {
   // Concept/Topic起点（heading指定あり）は、Digger側の短い導入をassistantの最初の発言として
   // 予め入れておくことで、「自由入力を主役にする」シンプルな画面（記事情報カードなどを
@@ -410,9 +579,9 @@ export default function DeepDiveSession({
   const [showBackground, setShowBackground] = useState(false);
   const [showSummaryInChat, setShowSummaryInChat] = useState(false);
 
-  const [knowledgeSaveState, setKnowledgeSaveState] = useState<KnowledgeSaveState>({ status: "idle" });
-  const [knowledgeSelectedIds, setKnowledgeSelectedIds] = useState<Set<string>>(new Set());
-  const [showKnowledgePanel, setShowKnowledgePanel] = useState(false);
+  const [memorySaveState, setMemorySaveState] = useState<MemorySaveState>({ status: "idle" });
+  const [memorySelectedIds, setMemorySelectedIds] = useState<Set<string>>(new Set());
+  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
 
   const handleDeepDive = async (questionText: string) => {
     const trimmed = questionText.trim();
@@ -434,48 +603,78 @@ export default function DeepDiveSession({
     }
   };
 
-  const handleExtractKnowledge = async () => {
+  const handleExtractMemory = async () => {
     const history: ConversationTurn[] = messages.map((m) => ({ role: m.role, content: m.content }));
 
-    setKnowledgeSaveState({ status: "extracting" });
-    setShowKnowledgePanel(true);
-    setKnowledgeSelectedIds(new Set());
+    setMemorySaveState({ status: "extracting" });
+    setShowMemoryPanel(true);
+    setMemorySelectedIds(new Set());
 
     try {
-      const candidates = await extractKnowledge(source, analysis, history);
-      setKnowledgeSaveState({ status: "extracted", candidates });
+      const candidates = await extractMemory(source, analysis, history);
+      const items: MemoryDraftItem[] = candidates.map((candidate) => ({ ...candidate, origin: "ai_extracted" }));
+      setMemorySaveState({ status: "extracted", items });
     } catch (err) {
-      setKnowledgeSaveState({ status: "error", message: err instanceof Error ? err.message : "知識抽出に失敗しました" });
+      setMemorySaveState({ status: "error", message: err instanceof Error ? err.message : "抽出に失敗しました" });
     }
   };
 
-  const handleSaveSelectedKnowledge = async () => {
-    if (knowledgeSaveState.status !== "extracted") return;
+  // AI候補のtitle/content/metadataを編集する。編集した時点でoriginを"user_edited"に切り替える
+  // （ユーザーが自分で追加したitemは"user_created"のまま維持する）。
+  const handleUpdateMemoryItem = (id: string, patch: MemoryItemPatch) => {
+    if (memorySaveState.status !== "extracted") return;
+    setMemorySaveState({
+      status: "extracted",
+      items: memorySaveState.items.map((item) =>
+        item.id === id
+          ? { ...item, ...patch, origin: item.origin === "user_created" ? item.origin : "user_edited" }
+          : item,
+      ),
+    });
+  };
 
-    const selectedCandidates = knowledgeSaveState.candidates.filter((c) => knowledgeSelectedIds.has(c.id));
+  // 「＋ 自分で追加」から、AI候補を介さずユーザー自身がMemoryItemを追加する。
+  const handleAddOwnMemoryItem = (type: MemoryItemType, content: string, note: string) => {
+    if (memorySaveState.status !== "extracted") return;
+    const newItem: MemoryDraftItem = {
+      id: crypto.randomUUID(),
+      type,
+      content,
+      reason: note || undefined,
+      confidence: "high",
+      origin: "user_created",
+    };
+    setMemorySaveState({ status: "extracted", items: [...memorySaveState.items, newItem] });
+    setMemorySelectedIds((prev) => new Set(prev).add(newItem.id));
+  };
 
-    if (selectedCandidates.length === 0) return;
+  const handleSaveSelectedMemory = async () => {
+    if (memorySaveState.status !== "extracted") return;
 
-    setKnowledgeSaveState({ status: "saving" });
+    const selectedItems = memorySaveState.items.filter((item) => memorySelectedIds.has(item.id));
+
+    if (selectedItems.length === 0) return;
+
+    setMemorySaveState({ status: "saving" });
 
     try {
-      const result = await saveKnowledge(source, selectedCandidates);
-      setKnowledgeSaveState({
+      const result = await saveMemory(source, selectedItems);
+      setMemorySaveState({
         status: "saved",
-        message: describeSaveResult(selectedCandidates, result.savedCount, result.skippedCount),
+        message: describeSaveResult(selectedItems, result.savedCount, result.skippedCount),
       });
-      setShowKnowledgePanel(false);
-      setKnowledgeSelectedIds(new Set());
-      onKnowledgeSaved?.();
+      setShowMemoryPanel(false);
+      setMemorySelectedIds(new Set());
+      onMemorySaved?.();
 
       // 大げさな画面遷移はせず、チャット画面上の小さなフィードバックのみ。数秒後に自動的に消す。
       setTimeout(() => {
-        setKnowledgeSaveState({ status: "idle" });
+        setMemorySaveState({ status: "idle" });
       }, 4000);
     } catch (err) {
-      setKnowledgeSaveState({
+      setMemorySaveState({
         status: "error",
-        message: err instanceof Error ? err.message : "知識の保存に失敗しました",
+        message: err instanceof Error ? err.message : "保存に失敗しました",
       });
     }
   };
@@ -610,39 +809,40 @@ export default function DeepDiveSession({
           />
 
           {messages.some((m) => m.role === "assistant") && (
-            <button type="button" className="link-button" onClick={handleExtractKnowledge}>
-              今回わかったことを残す
+            <button type="button" className="link-button" onClick={handleExtractMemory}>
+              今回残したいこと
             </button>
           )}
 
-          {(knowledgeSaveState.status === "extracted" || knowledgeSaveState.status === "saving") &&
-            showKnowledgePanel && (
-              <KnowledgeConfirmationPanel
-                candidates={knowledgeSaveState.status === "extracted" ? knowledgeSaveState.candidates : []}
-                selectedIds={knowledgeSelectedIds}
-                onToggleSelect={(id) => {
-                  const next = new Set(knowledgeSelectedIds);
-                  if (next.has(id)) {
-                    next.delete(id);
-                  } else {
-                    next.add(id);
-                  }
-                  setKnowledgeSelectedIds(next);
-                }}
-                onSave={handleSaveSelectedKnowledge}
-                saving={knowledgeSaveState.status === "saving"}
-              />
-            )}
+          {(memorySaveState.status === "extracted" || memorySaveState.status === "saving") && showMemoryPanel && (
+            <MemoryConfirmationPanel
+              items={memorySaveState.status === "extracted" ? memorySaveState.items : []}
+              selectedIds={memorySelectedIds}
+              onToggleSelect={(id) => {
+                const next = new Set(memorySelectedIds);
+                if (next.has(id)) {
+                  next.delete(id);
+                } else {
+                  next.add(id);
+                }
+                setMemorySelectedIds(next);
+              }}
+              onUpdate={handleUpdateMemoryItem}
+              onAdd={handleAddOwnMemoryItem}
+              onSave={handleSaveSelectedMemory}
+              saving={memorySaveState.status === "saving"}
+            />
+          )}
 
-          {knowledgeSaveState.status === "extracting" && (
+          {memorySaveState.status === "extracting" && (
             <div className="knowledge-loading">
-              <NoteMoleLoader label="わかったことを整理中…" />
+              <NoteMoleLoader label="残したいことを整理中…" />
             </div>
           )}
 
-          {knowledgeSaveState.status === "error" && <p className="error-message">エラー: {knowledgeSaveState.message}</p>}
+          {memorySaveState.status === "error" && <p className="error-message">エラー: {memorySaveState.message}</p>}
 
-          {knowledgeSaveState.status === "saved" && <p className="success-message">{knowledgeSaveState.message}</p>}
+          {memorySaveState.status === "saved" && <p className="success-message">{memorySaveState.message}</p>}
         </section>
       )}
     </article>

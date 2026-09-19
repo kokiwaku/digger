@@ -570,6 +570,90 @@
   margin-top: 1.5rem;
 }
 
+/* Diggerの保存機能をKnowledgeだけに限定せず、preference/candidate/decision/open_question
+   も残せるようにした「今回残したいこと」パネル用のスタイル。既存の.knowledge-*と
+   見た目を揃えつつ、type別グループ・編集・自分で追加の分だけ最小限を追加する。 */
+.memory-candidate-metadata {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.memory-candidate-reasons,
+.memory-candidate-concerns {
+  margin: 0.15rem 0;
+}
+
+.memory-item-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.memory-edit-input,
+.memory-edit-textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.memory-edit-textarea {
+  resize: vertical;
+}
+
+.memory-edit-toggle {
+  font-size: 0.8rem;
+}
+
+.memory-add-toggle {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.memory-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.9rem;
+  background: #fafafa;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+}
+
+.memory-add-type-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.memory-add-type-button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  background: #fff;
+  color: #444;
+  cursor: pointer;
+}
+
+.memory-add-type-button.active {
+  background: #1a1a1a;
+  border-color: #1a1a1a;
+  color: #fff;
+}
+
+.memory-add-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .success-message {
   color: #16a34a;
   background: #f0fdf4;
