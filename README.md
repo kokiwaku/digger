@@ -110,6 +110,7 @@ Content-Type: application/json
 - 質問は常に自由入力欄から行います（AIが提示する質問候補をクリックする導線はUI上にありません）。
 - 2回目以降の質問では、これまでの会話（`{ role: "user" | "assistant", content: string }[]`）を`conversationHistory`として送ります。
 - 成功時のレスポンスは `{ answer, relatedConcepts, suggestedFollowUps }`。**frontendは`answer`のみを表示し、`relatedConcepts`/`suggestedFollowUps`は受け取っても画面には出しません**（Diggerの「ユーザー自身の疑問を起点に掘る」という方針のため）。backendの型・schemaはこれらのフィールドを引き続き保持しています（将来的な別用途のため）。
+- **Diggerの「掘る」は、概念について詳しく説明することだけを意味しません**。仕組みの理解・歴史・具体例・候補探し・比較・メリデメ整理・判断材料の整理・意思決定支援・未解決の疑問の確認まで、ユーザーが知りたい方向へ自由に掘り進められます。「人気の車種を5台出して」「AirとProどっちがいい？」のような候補探し・比較・おすすめの要求にも、Digger側の役割を理由に拒否せず直接答えます（以前はこのような場合に「Diggerは製品推薦をするサービスではありません」という拒否が起きることがありましたが、修正済みです）。ただし「客観情報」「一般的傾向（個人差が大きい内容は断定しすぎない）」「保存済みPreference等のユーザー条件からの推奨」「不確実な推測」は区別します。また、車種ランキング・価格・最新ニュースなど鮮度が重要な質問については、現時点でDiggerにWeb検索機能が無いため、学習済みの知識だけを最新の事実であるかのように断定しません（詳細は[`backend/README.md`](backend/README.md#deep-diveの役割制限を外すuser意図への自然な追従)を参照）。
 - `LLM_PROVIDER`で切り替え可能: `mock`（デフォルト）なら記事の解析結果（`concepts`/`deepDiveQuestions`）から組み立てた固定応答、`vertex`ならVertex AI Geminiが記事のArticle Analysis・会話履歴・（あれば）ユーザーの理解履歴を踏まえて実際に回答します。Diggerは一般的な雑談チャットではなく、今読んでいる記事・テーマを理解するための専用家庭教師として振る舞うよう指示しています。
 - **回答は短く会話的で、質問の種類に応じて長さが変わります**: Diggerは1回の回答でテーマ全体を説明し切るのではなく、ユーザーとの往復で理解を深めるサービスという方針のもと、まず質問に直接答え、今回質問された範囲に集中し、不要な背景説明や周辺知識まで広げすぎないようpromptで指示しています。「MI6の起源は？」のような単純な事実質問は150〜300文字程度、「なぜ利上げすると円高になりやすい？」のような因果関係・仕組みの質問は300〜500文字程度（3〜5段落程度）を目安にし、「詳しく」「もっと深掘りして」のように明示的に詳細を求められた場合のみ、その目安にとらわれず詳しく説明します。「詳しい回答」より「今の疑問にちょうどよく答える」ことを優先していますが、短くするために情報を曖昧にすることはありません。
 - **保存済みKnowledgeを自動的に活用します**: クライアントから明示的に渡さなくても、サーバー側が保存済みKnowledge（`status: active`/`foundational`のみ）の中から今回の質問・記事に関連しそうなものだけを自動的に選び、Geminiに「このユーザーが過去に理解したこと」として渡します（毎回全件を送るのではなく、関連しそうな3〜5件程度に絞り込みます。詳細は[`backend/README.md`](backend/README.md)を参照）。Geminiは、関連性が高ければ過去の理解と自然につなげて説明しますが、毎回答で無理に「以前あなたは○○を理解しました」のように触れることはありません。関連するKnowledgeが無い場合は従来通り通常の説明をします。
@@ -270,12 +271,13 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出、Article Analysis・Deep Dive・Memory ExtractionのVertex AI（Gemini）実LLM化、「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化、保存済みKnowledgeのDeep Diveでの再利用、Knowledgeの理解状態（`status`）・既存Knowledgeとの関係（`relationToExisting`）の判定、[自分の理解ページ](#自分の理解ページ)（最近／トピック／マップの3ビュー）、[自分の理解からさらに掘る循環](#自分の理解からさらに掘る循環)（Concept/Topicを起点にしたDeep Dive）、[理解・判断の蓄積（Memory Extraction）](#理解判断の蓄積memory-extraction)（Knowledge以外にpreference/candidate/decision/open_questionも残せる保存機能）は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、Article Analysis・Deep Dive・Memory ExtractionのVertex AI（Gemini）実LLM化、「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化、保存済みKnowledgeのDeep Diveでの再利用、Knowledgeの理解状態（`status`）・既存Knowledgeとの関係（`relationToExisting`）の判定、[自分の理解ページ](#自分の理解ページ)（最近／トピック／マップの3ビュー）、[自分の理解からさらに掘る循環](#自分の理解からさらに掘る循環)（Concept/Topicを起点にしたDeep Dive）、[理解・判断の蓄積（Memory Extraction）](#理解判断の蓄積memory-extraction)（Knowledge以外にpreference/candidate/decision/open_questionも残せる保存機能）、保存済みPreference/Candidate等をDeep Diveへ自動的に反映する仕組み、Deep Diveがユーザーの意図（具体例・候補探し・比較・推薦等）に自然に追従する役割定義（[`backend/README.md`](backend/README.md#deep-diveの役割制限を外すuser意図への自然な追従)を参照）は実装済みですが、以下は未実装・未設計です。
 
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線（型・モックは実装済み）
 - Deep Diveの会話履歴の要約（現状は直近20件を単純に切り詰めるだけ）
 - Memory Extractionの重複判定を、文字列の正規化一致からEmbedding/Vector Searchベースの意味的な類似度判定に強化する
-- preference/candidate/decision/open_questionをDeep Diveの関連Contextとして自動的に取得・活用する仕組み（今回はKnowledgeの[Relevant Knowledge Retrieval](backend/README.md#relevant-knowledge-retrievalとknowledgeの再利用)に相当するものは未実装）
+- Deep Diveへ渡すPreference/Candidate等の関連度判定を、Knowledgeの[Relevant Knowledge Retrieval](backend/README.md#relevant-knowledge-retrievalとknowledgeの再利用)相当の文字列一致スコアリングへ強化する（現状は直近作成順の単純な上位N件）
+- Deep Dive + Web Search（現在Diggerは検索機能を持たず、鮮度が重要な質問には留保を添えるだけ。`DeepDiveInput`はfield追加で拡張できる構造にしてある）
 - candidateのmetadata.status（candidate/shortlisted/selected/rejected）を使った比較・管理UI（型のみ用意、UIは無し）
 - Knowledge Detailからの「この理解をさらに掘る」（Concept/Topic起点のDig循環をKnowledgeにも広げる）
 - **Knowledgeの自動統合**: `relationToExisting`（`extends`/`supersedes`）を使って、既存Knowledgeを実際に`merged`/`outdated`へ遷移させたり書き換えたりする処理（今回は判定・記録のみ）
