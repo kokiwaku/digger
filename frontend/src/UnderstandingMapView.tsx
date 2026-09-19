@@ -17,11 +17,14 @@ import { STATUS_LABELS, effectiveStatus, statusClassName } from "./Understanding
 import { sourceDisplayTitle } from "./sourceLabel";
 import ConceptNode, { type ConceptNodeData } from "./ConceptNode";
 import TopicNode, { type TopicNodeData } from "./TopicNode";
+import ClusterHaloNode, { type ClusterHaloNodeData } from "./ClusterHaloNode";
 import {
   UNCLASSIFIED_CLUSTER,
+  applyRelaxedLayout,
   buildTopicColorMap,
+  centerToTopLeft,
   computeConceptSize,
-  computeHierarchyLayout,
+  computeHierarchyLayoutCenters,
   computeRootTopicSize,
   computeSubtopicSize,
   findRootTopicId,
@@ -29,6 +32,8 @@ import {
   type HierarchyEdgeInput,
   type HierarchyNodeInput,
   type MapNodeKind,
+  type Point,
+  type RelationEdgeInput,
 } from "./mapLayout";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
@@ -36,7 +41,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787
 // Mapのnodeは基本的にRoot Topic / Topic(Subtopic) / Conceptまで。Knowledgeは
 // 「Map上のnode」ではなく「Concept詳細（右Detail Panel）の中身」として扱うため、
 // KnowledgeNodeのようなnodeTypeはここに存在しない。
-const NODE_TYPES = { concept: ConceptNode, topic: TopicNode };
+const NODE_TYPES = { concept: ConceptNode, topic: TopicNode, clusterHalo: ClusterHaloNode };
 const MINIMAP_THRESHOLD = 25;
 
 type UnderstandingMapData = {
@@ -163,6 +168,7 @@ const RELATION_TYPE_LABEL: Record<ConceptRelationType, string> = {
 
 // ConceptRelation（横断的なつながり）は階層のparent-child edgeより控えめに表示する
 // （階層構造が主役、横断的なつながりは補足という位置づけのため、破線・薄い色にする）。
+// Mapはprocess flowではないので、矢印は小さく控えめにとどめる（#9）。
 function buildCrossRelationEdges(relations: ConceptRelation[], visibleConceptIds: Set<string>): Edge[] {
   return relations
     .filter((r) => visibleConceptIds.has(r.fromConceptId) && visibleConceptIds.has(r.toConceptId))
@@ -173,22 +179,21 @@ function buildCrossRelationEdges(relations: ConceptRelation[], visibleConceptIds
       label: RELATION_TYPE_LABEL[r.type],
       style: { stroke: "#ddd", strokeDasharray: "3 3" },
       labelStyle: { fontSize: 9, fill: "#aaa" },
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#ddd", width: 10, height: 10 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#ddd", width: 7, height: 7 },
       zIndex: 0,
     }));
 }
 
-// 階層edge（parent-child）はMapの主構造なので、branchが追いやすいよう elbow風の
-// smoothstepにする（ConceptRelationのbezier曲線とは見た目を変え、主従がはっきり分かる
-// ようにする）。細すぎず、しかし主張しすぎない太さ・色にとどめる。
+// 階層edge（parent-child）は、以前はbranchを追いやすいよう直角的なsmoothstepにしていたが、
+// 「業務フロー図・組織図に見える」という指摘を受け、なめらかなcurve（React Flowの
+// デフォルトbezier）に変更した（#8）。矢印は「AからBへ処理が流れる」ようには見せたくない
+// ため廃止し、位置関係と線だけで親子関係が読めるようにする（#9）。
 function buildParentChildEdges(edges: HierarchyEdgeInput[]): Edge[] {
   return edges.map((e) => ({
     id: e.id,
     source: e.source,
     target: e.target,
-    type: "smoothstep",
-    style: { stroke: "#b0b0b0", strokeWidth: 1.75 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: "#b0b0b0", width: 12, height: 12 },
+    style: { stroke: "#c2c2c2", strokeWidth: 1.5 },
     zIndex: 1,
   }));
 }
@@ -488,7 +493,7 @@ export default function UnderstandingMapView({
   // 場合に、フィルタ解除後の再描画を待ってからカメラを寄せるための一時的な保留id。
   const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | TopicNodeData>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | TopicNodeData | ClusterHaloNodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
   const nodesRef = useRef<Node[]>([]);
   useEffect(() => {
@@ -675,10 +680,18 @@ export default function UnderstandingMapView({
       knowledgeByConceptFiltered.set(c._id, knowledgeByConcept.get(c._id) ?? []);
     }
 
+    // クラスタ（Root Topicの島）単位のオフセットに使う、node id→ルートTopic idの対応。
+    const clusterKeyById = new Map<string, string>();
+    for (const t of relevantTopics) {
+      clusterKeyById.set(t._id, findRootTopicId(topics, t._id));
+    }
+    if (hasUnclassified) clusterKeyById.set(UNCLASSIFIED_CLUSTER, UNCLASSIFIED_CLUSTER);
+
     for (const c of relevantConcepts) {
       const knowledgeItems = knowledgeByConceptFiltered.get(c._id) ?? [];
       const size = computeConceptSize(knowledgeItems.length);
       hierarchyNodes.push({ id: c._id, kind: "concept", width: size, height: size });
+      clusterKeyById.set(c._id, getClusterKey(c, topics));
 
       // 複数Topicに属するConceptは、そのすべての親からedgeを引く（1つだけに絞らない）。
       const parentTopicIds = c.topicIds.filter((id) => relevantTopicIds.has(id));
@@ -691,7 +704,25 @@ export default function UnderstandingMapView({
       }
     }
 
-    const positions = computeHierarchyLayout(hierarchyNodes, hierarchyEdges, "LR");
+    // Concept同士のConceptRelationも、relaxed layoutの「引き寄せ」入力として使う
+    // （階層edgeとは別に、relationで結ばれたConceptが自然に近づくようにする）。
+    const relationEdgesForLayout: RelationEdgeInput[] = relations
+      .filter((r) => relevantConceptIds.has(r.fromConceptId) && relevantConceptIds.has(r.toConceptId))
+      .map((r) => ({ source: r.fromConceptId, target: r.toConceptId }));
+
+    const centerPositions = computeHierarchyLayoutCenters(hierarchyNodes, hierarchyEdges, "LR");
+    const relaxedCenters = applyRelaxedLayout(
+      centerPositions,
+      hierarchyNodes.map((n) => ({ id: n.id, kind: n.kind, size: n.width })),
+      relationEdgesForLayout,
+      clusterKeyById,
+    );
+    const sizeById = new Map(hierarchyNodes.map((n) => [n.id, { width: n.width, height: n.height }]));
+    const positions = new Map<string, Point>();
+    for (const [id, center] of relaxedCenters) {
+      const size = sizeById.get(id);
+      positions.set(id, centerToTopLeft(center, size?.width ?? 0, size?.height ?? 0));
+    }
 
     const newNodes: Node[] = [];
     for (const t of relevantTopics) {
@@ -753,7 +784,48 @@ export default function UnderstandingMapView({
       newNodes.push({ id: c._id, type: "concept", position: pos, data, style: { width: size, height: size }, zIndex: 2 });
     }
 
-    setNodes(newNodes);
+    // #12: Root Topicごとの「島」の領域を、大きな枠線ではなく控えめなradial gradientの
+    // halo（背景円）でなんとなく示す。最終座標（jitter/引力/collision解消後）から
+    // クラスタごとのbounding boxを求め、それを覆う程度の円を最背面（zIndex最小）に敷く。
+    const clusterBounds = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
+    for (const node of hierarchyNodes) {
+      const pos = positions.get(node.id);
+      const clusterKey = clusterKeyById.get(node.id);
+      if (!pos || !clusterKey) continue;
+      const bounds = clusterBounds.get(clusterKey);
+      const x0 = pos.x;
+      const y0 = pos.y;
+      const x1 = pos.x + node.width;
+      const y1 = pos.y + node.height;
+      if (!bounds) {
+        clusterBounds.set(clusterKey, { minX: x0, minY: y0, maxX: x1, maxY: y1 });
+      } else {
+        bounds.minX = Math.min(bounds.minX, x0);
+        bounds.minY = Math.min(bounds.minY, y0);
+        bounds.maxX = Math.max(bounds.maxX, x1);
+        bounds.maxY = Math.max(bounds.maxY, y1);
+      }
+    }
+
+    const HALO_PADDING = 56;
+    const haloNodes: Node[] = Array.from(clusterBounds.entries()).map(([clusterKey, bounds]) => {
+      const data: ClusterHaloNodeData = { color: topicColorMap.get(clusterKey) ?? "#999999" };
+      return {
+        id: `halo-${clusterKey}`,
+        type: "clusterHalo",
+        position: { x: bounds.minX - HALO_PADDING, y: bounds.minY - HALO_PADDING },
+        data,
+        style: {
+          width: bounds.maxX - bounds.minX + HALO_PADDING * 2,
+          height: bounds.maxY - bounds.minY + HALO_PADDING * 2,
+        },
+        draggable: false,
+        selectable: false,
+        zIndex: -1,
+      };
+    });
+
+    setNodes([...haloNodes, ...newNodes]);
     setEdges([...buildParentChildEdges(hierarchyEdges), ...buildCrossRelationEdges(relations, relevantConceptIds)]);
     setLayoutVersion((v) => v + 1);
   }
