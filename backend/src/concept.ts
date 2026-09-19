@@ -23,10 +23,12 @@ export const conceptDocumentSchema = z.object({
 });
 export type ConceptDocument = z.infer<typeof conceptDocumentSchema>;
 
-// Concept名の表記揺れ（前後の空白・大文字小文字）を吸収するための単純な正規化。
-// knowledge.tsのnormalizeForDedupと同じ思想（Embedding等の高度な類似度判定はスコープ外）。
+// Concept名の表記揺れ（前後の空白・大文字小文字・全角/半角）を吸収するための単純な正規化。
+// NFKCで「ＳＵＶ」⇔「SUV」のような全角/半角・互換文字の違いを畳んでから比較する
+// （Embedding等の意味的な類似度判定はスコープ外。あくまで見た目上ほぼ同じ表記の統合のみ）。
+// knowledge.tsのnormalizeForDedupと同じ思想。
 export function normalizeConceptName(name: string): string {
-  return name.trim().toLowerCase();
+  return name.normalize("NFKC").trim().toLowerCase();
 }
 
 function getCollection() {
@@ -70,6 +72,22 @@ export async function addTopicToConcept(userId: string, conceptId: string, topic
   await getCollection().updateOne(
     { _id: new ObjectId(conceptId), userId },
     { $addToSet: { topicIds: topicId }, $set: { updatedAt: new Date() } },
+  );
+}
+
+// Topicの重複統合（understandingStructure.tsのmergeDuplicateTopicsByName()）用。
+// oldTopicIdを参照しているConceptについて、topicIdsをnewTopicIdへ付け替える
+// （$addToSetしてから$pullする2段階。同じ更新の中で行うより単純で確実）。
+// newTopicIdが既にtopicIdsに含まれていた場合は自然に重複排除される（$addToSetのため）。
+export async function replaceTopicIdOnConcepts(userId: string, oldTopicId: string, newTopicId: string): Promise<void> {
+  const collection = getCollection();
+  await collection.updateMany(
+    { userId, topicIds: oldTopicId },
+    { $addToSet: { topicIds: newTopicId }, $set: { updatedAt: new Date() } },
+  );
+  await collection.updateMany(
+    { userId, topicIds: oldTopicId },
+    { $pull: { topicIds: oldTopicId }, $set: { updatedAt: new Date() } },
   );
 }
 

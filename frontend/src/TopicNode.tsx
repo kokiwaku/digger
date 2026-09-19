@@ -14,7 +14,7 @@ export type TopicNodeData = {
 
 // Root TopicとSubtopicは役割は違うが見た目の作りは共通（円形・塗りつぶし）なので
 // 1つのコンポーネントで扱う。ConceptやKnowledgeとは明確に見た目を変え（後述の
-// ConceptNode/KnowledgeNode参照）、Root TopicはSubtopicより一段強い塗り・太い枠にして
+// ConceptNode参照）、Root TopicはSubtopicより一段強い塗り・太い枠にして
 // 「最も大きい・強い」という階層の頂点であることを視覚的に示す。
 export default function TopicNode({ data }: NodeProps<TopicNodeData>) {
   const isRoot = data.variant === "root";

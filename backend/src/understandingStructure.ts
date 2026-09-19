@@ -12,6 +12,7 @@ import {
   getConceptById,
   getUserConcepts,
   addTopicToConcept,
+  replaceTopicIdOnConcepts,
   type ConceptDocument,
 } from "./concept.js";
 import {
@@ -21,7 +22,14 @@ import {
   type ConceptRelationDocument,
   type ConceptRelationType,
 } from "./conceptRelation.js";
-import { findOrCreateTopicPath, getUserTopics, buildTopicPathStrings, type TopicDocument } from "./topic.js";
+import {
+  findOrCreateTopicPath,
+  getUserTopics,
+  buildTopicPathStrings,
+  groupDuplicateTopicsByName,
+  mergeTopics,
+  type TopicDocument,
+} from "./topic.js";
 import { getKnowledgeTopicService } from "./llm/knowledgeTopicFactory.js";
 
 // KnowledgeのrelationsOut（extends/supersedes）を、Concept間の関係typeへ変換する。
@@ -223,12 +231,57 @@ export async function getUnderstandingMap(userId: string = FIXED_USER_ID): Promi
   return { topics, concepts, relations };
 }
 
+// Topic分類（LLM）はバッチ・会話ごとに実行されるため、同じ名前のTopicが異なる親の下に
+// それぞれ独立して作られてしまうことがある（実データで確認: 「自動車」の直下と
+// 「自動車 > 車種選択」の下、両方に「SUV」というTopicが存在していた）。Topicは
+// Conceptと違い1つの親しか持てない設計（Mapの「背骨」として厳密なtreeであることを
+// 優先しているため）なので、Map表示側で複数の親から1つのnodeへ収束させることはできない
+// （それができるのはConcept側。Concept.topicIdsは複数所属を許容する設計になっている）。
+// そのため、Topic側は重複したentityそのものを統合して解決する。
+// 正規化後の名前が完全一致するTopicだけを対象にし（高度なsemantic dedupはスコープ外）、
+// 最も早く作られたものを正本として残し、それ以外をmergeTopics()で統合したうえで、
+// 統合されたTopicを参照していたConceptのtopicIdsも正本のidへ付け替える。
+export async function mergeDuplicateTopicsByName(userId: string = FIXED_USER_ID): Promise<void> {
+  try {
+    const topics = await getUserTopics(userId);
+    const withId = topics
+      .filter((t): t is TopicDocument & { _id: NonNullable<TopicDocument["_id"]> } => Boolean(t._id))
+      .map((t) => ({
+        id: t._id.toHexString(),
+        parentId: t.parentId ?? null,
+        name: t.name,
+        status: t.status,
+        createdAt: t.createdAt,
+      }));
+
+    const groups = groupDuplicateTopicsByName(withId);
+
+    for (const group of groups) {
+      const sorted = [...group].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      const canonical = sorted[0];
+      for (const duplicate of sorted.slice(1)) {
+        try {
+          await mergeTopics(userId, duplicate.id, canonical.id);
+          await replaceTopicIdOnConcepts(userId, duplicate.id, canonical.id);
+        } catch (err) {
+          console.error("[understandingStructure] failed to merge a duplicate topic, continuing", err);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[understandingStructure] failed to merge duplicate topics, continuing without it", err);
+  }
+}
+
 // POST /api/understanding-map/refreshの実体。未移行のKnowledge（lazy migration）と
-// 未分類のConcept（lazy classification、LLM呼び出しを伴う）を明示的に処理してから、
-// 更新後の理解構造を返す。GETとは違い、これは呼び出し側が「重い処理が起きる」ことを
-// 理解した上で明示的に叩くエンドポイントである。
+// 同名Topicの重複統合、未分類のConcept（lazy classification、LLM呼び出しを伴う）を
+// 明示的に処理してから、更新後の理解構造を返す。GETとは違い、これは呼び出し側が
+// 「重い処理が起きる」ことを理解した上で明示的に叩くエンドポイントである。
+// Topic統合はConcept分類より前に行い、分類対象のexisting topic pathsを
+// 重複の無い状態にしてからLLMへ渡す。
 export async function refreshUnderstandingMap(userId: string = FIXED_USER_ID): Promise<UnderstandingMap> {
   await ensureConceptsForKnowledge(userId);
+  await mergeDuplicateTopicsByName(userId);
   await assignTopicsToUnclassifiedConcepts(userId);
   return getUnderstandingMap(userId);
 }
