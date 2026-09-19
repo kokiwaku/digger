@@ -15,12 +15,12 @@ export type ConceptNodeData = {
 // Mapは俯瞰用のUIなので、node内には短縮済みの`label`（最大1〜2行に収まる文字数）だけを表示し、
 // フルテキストの`name`はネイティブのtitle属性（hover時のtooltip）でのみ確認できるようにする
 // （クリック後の詳細パネルでも全文を確認できる）。
-// 階層構造ではTopic（Root/Sub）より一段小さく、Knowledge leafより一段大きい「中間の丸」として
-// 描画する（サイズの主基準は階層、Knowledge数はmapLayout.tsのcomputeConceptSize()による
-// 小さな補助差にとどまる）。
+// 階層構造ではTopic（Root/Sub）より一段小さい「Map上の末端node」として描画する
+// （Knowledgeはもうnodeとして存在せず、Concept詳細＝右Detail Panelの中身として読む）。
+// サイズの主基準は階層そのもの、Knowledge数はmapLayout.tsのcomputeConceptSize()による
+// 最大6pxの小さな補助差にとどまる（Relation数はサイズに関与させない）。
 // hover時のhighlighted/dimmed、クリック後のselectedはUnderstandingMapView側で計算し、
-// ここでは見た目に反映するだけ。NEWバッジはKnowledge nodeだけに付け、ここには付けない
-// （すべてのnodeにNEWが付くと目立たせたい場所が分からなくなるため）。
+// ここでは見た目に反映するだけ。
 export default function ConceptNode({ data }: NodeProps<ConceptNodeData>) {
   const classNames = [
     "concept-node",

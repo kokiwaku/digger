@@ -354,7 +354,7 @@ frontendの「自分の理解」ページ（最近／トピック／マップの
 上記の`Knowledge.topicPath`は「KnowledgeにLLMが直接トピック文字列を付与するだけ」の単純な仕組みで、「自分の理解」ページの現行UIをそのまま動かし続けるために**今回は一切変更していません**。一方で、Diggerが目指す「Knowledge Map = ユーザーの現時点の理解状態」を表現するには、Topic（俯瞰用の粗い分類）・Concept（MI6や政策金利のような具体的な理解対象）・Knowledge（Conceptについての具体的な理解内容）を別のentityとして分離し、あとから構造を組み替えられるようにする必要があります。そのための土台として、既存の仕組みとは**独立に並存する**新しいモデルを追加しました。既存の`GET /api/knowledge`・「自分の理解」ページのUI・既存testへの影響はありません。
 
 - **Topic（`topic.ts`）**: ユーザーごとに持つ可変の俯瞰用分類。グローバル固定マスタにはしていません。`{ userId, name, parentId, status: active/merged/archived }`で、`parentId`により最大3階層（`MAX_TOPIC_DEPTH`）の親子関係を持てます。`setTopicParent()`は循環（`wouldCreateCycle()`）や深さ超過（`wouldExceedMaxDepth()`）になる変更を拒否し、`mergeTopics()`は子TopicのparentIdを付け替えたうえでsourceを`merged`にします（削除はしません）。`findOrCreateTopicPath(userId, path)`は、同じ`userId`・`parentId`・`name`の既存active Topicがあれば再利用し、無ければ作成します。
-- **Concept（`concept.ts`）**: 「MI6」「政策金利」のような具体的な理解対象。`{ userId, name, topicIds: string[], status }`で、1つのConceptが複数Topicに属せます（例:「ハイブリッド戦争」が「情報・インテリジェンス」と「安全保障」の両方に関連するケース）。`findOrCreateConcept(userId, name)`が、名前の正規化（trim+lowercase）で既存Conceptを再利用するか新規作成するかを判断する唯一の入口です。
+- **Concept（`concept.ts`）**: 「MI6」「政策金利」のような具体的な理解対象。`{ userId, name, topicIds: string[], status }`で、1つのConceptが複数Topicに属せます（例:「ハイブリッド戦争」が「情報・インテリジェンス」と「安全保障」の両方に関連するケース）。`findOrCreateConcept(userId, name)`が、名前の正規化（`normalizeConceptName()`: NFKC正規化＋trim+lowercase）で既存Conceptを再利用するか新規作成するかを判断する唯一の入口です（NFKCにより「ＳＵＶ」「SUV」のような全角/半角の表記揺れも同一視します。Embedding等の意味的な類似度判定は引き続きスコープ外）。
 - **ConceptRelation（`conceptRelation.ts`）**: Map上のedgeを表現するConcept間の関係。typeは`related/prerequisite/part_of/causes/contrasts/extends`の6種類に絞っています。`createConceptRelation()`はself-relation（`isSelfRelation()`）と存在しないConceptへの関係を拒否し、同じ`from/to/type`の重複（`isDuplicateRelation()`）は新規作成せず既存のものを返します。
 - **KnowledgeとConceptの紐付け**: 既存の`concept: string`フィールドは変更せず、`conceptIds: string[]`を追加しました（1つのKnowledgeが複数Conceptに関係してもよい形ですが、現状の書き込みロジックは`concept`文字列1つにつきConcept 1件を紐付けるだけです）。
 - **保存時の「軽量更新」（`knowledgeApi.ts`の`saveCandidatesAsKnowledge()`）**: Knowledgeを新規保存した直後、`understandingStructure.ts`の`linkConceptsForSavedKnowledge()`が、`concept`文字列からConceptをfind-or-createして`conceptIds`をセットし、`relationsOut`（`extends`/`supersedes`）があればそれぞれ対応するConceptRelationを作成します。`supersedes`（既存の理解を置き換える）は`contrasts`（対比・対立）とは意味が異なるため、情報を失わないよう`ConceptRelationType`にも`supersedes`をそのまま残しています（`mapKnowledgeRelationTypeToConceptRelationType()`は恒等変換）。DB書き込みのみで完結する軽い処理なので、Knowledge保存と同じリクエスト内で同期的に行い、失敗してもtry/catchでKnowledge本体の保存結果には影響させません。
@@ -366,6 +366,19 @@ frontendの「自分の理解」ページ（最近／トピック／マップの
 - **Topic分類promptの方針強化**: `knowledgeTopic.vertex.ts`のprompt文言に、「新しいTopicを増やすこと自体を目的にしない」「一般的に正しい分類ではなく、このユーザーの現時点の理解を俯瞰しやすくすることが目的」「将来Topic構造が再編される前提で、今の情報から無理なく導ける分類を答える」という方針を明示的に追加しました。分類対象がKnowledge由来（既存）でもConcept由来（新規）でも同じprompt文言で扱えるよう、文言も「Knowledge」から「項目（KnowledgeまたはConcept）」という表現に一般化しています。
 - **`GET /api/understanding-map` / `POST /api/understanding-map/refresh`（新設）**: 前者は`getUnderstandingMap()`（純粋な読み取り）、後者は`refreshUnderstandingMap()`（`ensureConceptsForKnowledge()`→`assignTopicsToUnclassifiedConcepts()`を実行してから読み取り）を呼びます。既存の`GET /api/knowledge`はKnowledge detail取得用として残しており、frontendは`Knowledge.conceptIds`経由で両者を突き合わせられます（今回のPRではfrontend側はこのAPIをまだ利用しません。次回のMap UI刷新PRで本格的に使う想定）。
 - **今回UIは変更していません**: `frontend/src/types.ts`の`SavedKnowledge`に`conceptIds?: string[]`という型だけ先行して追加していますが、`UnderstandingPage.tsx`の表示ロジックは一切変更していません。
+
+### Understanding Mapの再設計: 「地図」としての骨格とつながり（frontend中心、backendはConcept名正規化のみ）
+
+初期のMap UI（Topic hierarchyをdagreでそのまま描画）には、「Knowledge nodeがノイズになる」「Conceptが複数箇所に重複表示される」「Tree構造が強すぎて業務フロー図に見える」という指摘があり、以下の方針で調整しました。バックエンド側の変更は`concept.ts`の名前正規化のみで、残りはすべてfrontendのレイアウト/レンダリングロジックです。
+
+- **重複調査の結果**: 実データを調査したところ、**同一名のConcept entityが複数保存されているケースは見つかりませんでした**。一方で、**同一名（「SUV」）のTopic entityが異なる親（「自動車」と「自動車 > 車種選択」）の下にそれぞれ独立して存在する**ケースを発見しました。これはKnowledge Topic分類（`assignTopicsToUnclassifiedConcepts()`が呼ぶLLM分類）が、バッチや会話ごとに微妙に異なるTopicパスを組み立てたことによるもので、`findOrCreateTopicPath()`は`userId`＋`parentId`＋`name`が完全一致する場合のみ再利用するため、親が違えば別のTopicとして正しく（仕様通りに）作成されます。Topic自動再編は今回のスコープ外のため、この点は修正していません（Mapの見え方としては「SUVというTopicが2箇所にある」ことになりますが、Concept自体が重複するわけではないため、実害は「同じ名前のTopicが2箇所に見える」程度にとどまります）。
+- **`normalizeConceptName()`にNFKC正規化を追加**: 上記調査で実際の重複は見つからなかったものの、`findOrCreateConcept()`の同一性判定（`trim`+`lowercase`のみ）は全角/半角の表記揺れ（「ＳＵＶ」と「SUV」等）を同一視できていなかったため、`String.prototype.normalize("NFKC")`を追加しました。意味的な類似度判定（Embedding等）はこれまで通りスコープ外です。
+- **Map nodeの種類をRoot Topic/Subtopic/Conceptの3種類に削減**: KnowledgeはMap上のnodeとして表示せず、Conceptをクリックした右Detail Panelの中身（既存の「自分が理解していること」セクション）としてのみ表示します。`KnowledgeNode.tsx`は削除し、`mapLayout.ts`の`MapNodeKind`からも`"knowledge"`を除きました。
+- **Conceptの複数親対応（重複表示の防止）**: 以前は`concept.topicIds[0]`（最初のTopicのみ）からhierarchy edgeを1本引いていましたが、`topicIds`に含まれる**すべての関連Topic**からedgeを引くように変更しました（`UnderstandingMapView.tsx`の`recomputeLayout()`）。dagreは厳密なtreeを要求しないDAGレイアウトのため、1つのConcept nodeが複数の親から辺を受け取ってもレイアウトが破綻しません。Concept nodeのidは常に`concept._id`（表示名ではない）なので、同名Conceptがあっても混同しません。
+- **Node sizeの3段階整理**（`mapLayout.ts`）: Root Topic 68〜76px／Subtopic 52〜60px／Concept 36〜44pxの3段階を主基準にし、同一階層内の補助調整（childCount/knowledgeCount）は最大6〜8pxに抑えました。ConceptRelationの本数（edge数）はサイズに一切関与させません（「つながりが多い＝理解が深い」ではないため。中心に配置されedgeが多く集まることで十分表現できるという考え方）。
+- **Detail Panel**: `ConceptDetailPanel`のKnowledge一覧は、Map上に対応するnodeが無くなったためクリック不可の地の文表示に変更しました（`KnowledgeDetailPanel`コンポーネント自体を削除）。Concept名・Topicパンくず・Knowledge一覧・関連Concept・「このConceptを掘る」は従来通り表示します。
+- **検索**: Knowledgeの検索結果は、対応するMap nodeが存在しないため、クリック時に**そのKnowledgeが属するConcept**（`conceptIds[0]`）へフォーカスするよう変更しました（`conceptIds`が無い古いデータは検索結果に出しません）。Topic/Conceptの検索結果は従来通りです。
+- **今回やっていないこと**: Topic自動再編（同名Topicの統合）、Graph DB/Embedding/Vector Searchによる意味的な重複統合、force-directedなど大規模なlayoutアルゴリズムの刷新（dagreベースの階層レイアウトは維持し、多親対応のみ追加）。
 
 ## LLMプロバイダー層（`llm/provider/`）
 

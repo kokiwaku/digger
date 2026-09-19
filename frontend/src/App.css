@@ -1250,76 +1250,6 @@
   z-index: 3;
 }
 
-/* Knowledgeのleaf node（React FlowのCustom Node、KnowledgeNode.tsx）。
-   「Mapは内容を読む場所ではなく理解構造を見る場所」という方針のため、Knowledgeは
-   Root Topic/Subtopic/Conceptの「丸＝階層nodeの実体」より明確に小さい、dot＋短い
-   captionのleaf表現にする（角丸pill/横長カードにはしない）。Knowledge本文全文は
-   Map上に一切出さず、クリック後の右Detail Panelでのみ確認できる。 */
-.knowledge-leaf-node {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  width: 100%;
-  height: 100%;
-  gap: 0.15rem;
-  cursor: pointer;
-  transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
-}
-
-.knowledge-leaf-dot {
-  position: relative;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  flex-shrink: 0;
-}
-
-/* NEWは直近7日以内のKnowledgeだけに付ける、小さな印にとどめる（テキストの
-   「NEW」バッジではなく、dotの縁を彩る程度の控えめな表現にしてMapの主役にしない）。 */
-.knowledge-leaf-dot-new {
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 1.5px solid #2b6cb0;
-}
-
-.knowledge-leaf-caption {
-  font-size: 0.56rem;
-  color: #555;
-  line-height: 1.1;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.knowledge-leaf-node-highlighted .knowledge-leaf-dot {
-  box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.35);
-}
-
-.knowledge-leaf-node-highlighted {
-  z-index: 2;
-}
-
-.knowledge-leaf-node-dimmed {
-  opacity: 0.6;
-}
-
-.knowledge-leaf-node-selected {
-  transform: scale(1.15);
-  z-index: 3;
-}
-
-.knowledge-leaf-node-selected .knowledge-leaf-dot {
-  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.35);
-}
-
 .concept-detail-panel-wrapper {
   width: 320px;
   flex-shrink: 0;
@@ -1391,25 +1321,6 @@
   margin: 0 0 0.25rem;
   font-size: 0.88rem;
   line-height: 1.5;
-}
-
-/* Detail Panel内のKnowledge一覧から、そのKnowledge自身のNode（Map上のleaf）へ
-   フォーカスできるようにするボタンラップ。見た目はテキストのままにし、ボタンらしさを
-   出しすぎない（クリックできることはcursor/hoverだけで示す）。 */
-.concept-detail-knowledge-link {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  cursor: pointer;
-}
-
-.concept-detail-knowledge-link:hover .concept-detail-knowledge-statement {
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 .concept-detail-knowledge-meta {

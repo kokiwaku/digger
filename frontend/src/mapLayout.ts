@@ -1,11 +1,15 @@
 // Understanding Mapのノード配置ロジック（Reactに依存しない純粋なモジュール）。
 //
-// Mapは「Conceptをランダムに散らしてつなぐもの」ではなく「ユーザーの現在の理解構造
-// （Topic hierarchy）を視覚化したもの」として設計する。そのためforce-directed layout
-// （d3-force）はやめ、Root Topic → Subtopic → Concept → Knowledgeという階層を
-// そのまま木構造レイアウト（dagre）で描画する。ConceptRelationは階層を補足する
-// 横断的なつながりとして別途重ねるだけで、レイアウト自体はTopic hierarchyだけで
-// 常に成立する（relationが0件でも意味のあるMapになる）。
+// Mapは完全なTreeでも完全なforce-directed graphでもない。Topic hierarchyを
+// 「理解構造の背骨」として使い、ConceptRelationを「理解の横方向の広がり」として
+// 重ねる中間的な構造を目指す。そのためTopic→Topic・Topic→Concept（親子関係）だけを
+// dagreでレイアウトし、ConceptRelationは位置が決まった後の補助edgeとして重ねる
+// （relationが0件でもTopic hierarchyだけでMapとして成立する）。
+// Conceptは1つのTopicだけの子にする必要はなく、複数のTopicに属する場合は
+// 複数の親からedgeを引く（同じConceptを複製しない。dagreはtreeではなくDAGとして
+// 扱えるため、1つのnodeが複数の親を持つことも問題なくレイアウトできる）。
+// Knowledgeは「Map上のnode」ではなく「Concept詳細（右Panel）の中身」として扱うため、
+// レイアウト対象にはしない。
 import dagre from "dagre";
 
 export interface TopicLike {
@@ -36,6 +40,8 @@ export interface ConceptLike {
 
 // 色分け・ツリー単位分けの基準は、Conceptの最初のtopicIdが属するルートTopic。
 // topicIdsが空（未分類）のConceptは専用の「未分類」ツリーに入れる。
+// Conceptが複数Topicに属する場合も、色は代表として最初のtopicId基準で1色に決める
+// （node自体は複数の親からedgeを受けるが、色分け自体は単純さを優先する）。
 export function getClusterKey(concept: ConceptLike, topics: TopicLike[]): string {
   const primaryTopicId = concept.topicIds[0];
   if (!primaryTopicId) return UNCLASSIFIED_CLUSTER;
@@ -44,31 +50,30 @@ export function getClusterKey(concept: ConceptLike, topics: TopicLike[]): string
 
 export type Point = { x: number; y: number };
 
-// Node sizeは「理解構造上の階層」を第一基準にする（relation数・Knowledge数を主基準にしない）。
-// 階層が一目で分かるよう、Root Topic > Subtopic > Concept > Knowledgeの差を強めに付ける
-// （以前のサイズ差は小さすぎたため拡大した）。KnowledgeはleafなのでConceptよりはっきり
-// 小さいdot＋短いcaptionにし、Map上ではもう内容を読ませない（詳細はDetail Panel）。
-export const ROOT_TOPIC_BASE_SIZE = 64;
-export const SUBTOPIC_BASE_SIZE = 50;
-export const CONCEPT_BASE_SIZE = 40;
-export const KNOWLEDGE_DOT_SIZE = 22;
-export const KNOWLEDGE_NODE_WIDTH = 76;
-export const KNOWLEDGE_NODE_HEIGHT = 40;
+// Node sizeは「理解構造上の階層」の3段階だけを主基準にする（Relation数・edge数を
+// 主要因にしない）。階層が一目で分かるよう段階間の差ははっきり付け、同一階層内での
+// 補助調整（childCount/knowledgeCountなど）は小さな範囲（最大6〜8px）にとどめる。
+export const ROOT_TOPIC_BASE_SIZE = 68;
+export const ROOT_TOPIC_MAX_SIZE = 76;
+export const SUBTOPIC_BASE_SIZE = 52;
+export const SUBTOPIC_MAX_SIZE = 60;
+export const CONCEPT_BASE_SIZE = 36;
+export const CONCEPT_MAX_SIZE = 44;
 
-// 同階層内の補助差（あくまで基本サイズへの小さな上乗せにとどめる。主基準は階層そのもの）。
 export function computeRootTopicSize(childCount: number): number {
-  return ROOT_TOPIC_BASE_SIZE + Math.min(6, childCount * 1);
+  return Math.min(ROOT_TOPIC_MAX_SIZE, ROOT_TOPIC_BASE_SIZE + Math.min(8, childCount));
 }
 
 export function computeSubtopicSize(childCount: number): number {
-  return SUBTOPIC_BASE_SIZE + Math.min(5, childCount * 0.8);
+  return Math.min(SUBTOPIC_MAX_SIZE, SUBTOPIC_BASE_SIZE + Math.min(8, childCount));
 }
 
+// Knowledge数による補助調整は最大6pxまで（Relation数はここに関与させない）。
 export function computeConceptSize(knowledgeCount: number): number {
-  return CONCEPT_BASE_SIZE + Math.min(4, knowledgeCount * 1);
+  return Math.min(CONCEPT_MAX_SIZE, CONCEPT_BASE_SIZE + Math.min(6, knowledgeCount * 1.5));
 }
 
-export type MapNodeKind = "rootTopic" | "subtopic" | "concept" | "knowledge";
+export type MapNodeKind = "rootTopic" | "subtopic" | "concept";
 
 export interface HierarchyNodeInput {
   id: string;
@@ -83,11 +88,13 @@ export interface HierarchyEdgeInput {
   target: string;
 }
 
-// 階層構造（Topic→Topic、Topic→Concept、Concept→Knowledge）だけをdagreに渡してレイアウトする。
+// 階層構造（Topic→Topic、Topic→Concept）だけをdagreに渡してレイアウトする。
+// Conceptが複数Topicに属する場合は、呼び出し側がそのTopic数だけHierarchyEdgeInputを
+// 渡してよい（1つのConcept nodeが複数の親からedgeを受け取るDAGとしてdagreに渡す。
+// dagreは厳密なtreeを要求しないため、複数の親を持つnodeもそのままレイアウトできる）。
 // ConceptRelation（横断的なつながり）はレイアウトには使わず、位置が決まった後に見た目だけの
-// 補助edgeとして重ねる（レイアウトを乱さないようにするため）。
-// 複数のルートTopicがある場合、dagreは非連結なグラフとしてまとめて配置する
-// （「すべて」表示時に複数の木が横に並ぶ）。
+// 補助edgeとして重ねる。複数のルートTopicがある場合、dagreは非連結なグラフとしてまとめて
+// 配置する（「すべて」表示時に複数の木が横に並ぶ）。
 export function computeHierarchyLayout(
   nodes: HierarchyNodeInput[],
   edges: HierarchyEdgeInput[],
@@ -100,14 +107,13 @@ export function computeHierarchyLayout(
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
     rankdir: direction,
-    // ranksep: 階層間（Root Topic→Subtopic→Concept→Knowledge）の間隔。Knowledgeが
-    // 小さなdotになりMap全体の情報量が減ったため、以前より少し詰めて全体をコンパクトにする。
-    // nodesep: 同じ階層内でのnode間の間隔。詰まって見えないよう以前より広げつつ、
+    // ranksep: 階層間（Root Topic→Subtopic→Concept）の間隔。
+    // nodesep: 同じ階層内でのnode間の間隔。詰まって見えないよう広げつつ、
     // 離れすぎて「複数の島」に見えないよう、branchが重ならない程度にとどめる。
-    ranksep: 60,
-    nodesep: 28,
-    marginx: 20,
-    marginy: 20,
+    ranksep: 70,
+    nodesep: 36,
+    marginx: 24,
+    marginy: 24,
   });
 
   for (const node of nodes) {

@@ -17,7 +17,6 @@ import { STATUS_LABELS, effectiveStatus, statusClassName } from "./Understanding
 import { sourceDisplayTitle } from "./sourceLabel";
 import ConceptNode, { type ConceptNodeData } from "./ConceptNode";
 import TopicNode, { type TopicNodeData } from "./TopicNode";
-import KnowledgeNode, { type KnowledgeNodeData } from "./KnowledgeNode";
 import {
   UNCLASSIFIED_CLUSTER,
   buildTopicColorMap,
@@ -27,8 +26,6 @@ import {
   computeSubtopicSize,
   findRootTopicId,
   getClusterKey,
-  KNOWLEDGE_NODE_HEIGHT,
-  KNOWLEDGE_NODE_WIDTH,
   type HierarchyEdgeInput,
   type HierarchyNodeInput,
   type MapNodeKind,
@@ -36,7 +33,10 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8787";
 
-const NODE_TYPES = { concept: ConceptNode, topic: TopicNode, knowledge: KnowledgeNode };
+// Mapのnodeは基本的にRoot Topic / Topic(Subtopic) / Conceptまで。Knowledgeは
+// 「Map上のnode」ではなく「Concept詳細（右Detail Panel）の中身」として扱うため、
+// KnowledgeNodeのようなnodeTypeはここに存在しない。
+const NODE_TYPES = { concept: ConceptNode, topic: TopicNode };
 const MINIMAP_THRESHOLD = 25;
 
 type UnderstandingMapData = {
@@ -143,15 +143,9 @@ function countKnowledgeByConcept(knowledge: SavedKnowledge[]): Map<string, Saved
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-function isRecent(dateStr: string): boolean {
-  return Date.now() - new Date(dateStr).getTime() <= WEEK_MS;
-}
-
 // Mapは俯瞰用のUIなので、node内のlabelは原則1〜2行に収まる文字数に短縮する。
 // フルテキストはtitle属性（hover tooltip）と詳細パネルで確認できる。
 const LABEL_MAX_CHARS = 12;
-// Knowledgeはdot＋短いcaptionのleafなので、Conceptよりさらに短く切る（1行に収める）。
-const KNOWLEDGE_LABEL_MAX_CHARS = 14;
 
 function truncateLabel(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -231,15 +225,19 @@ function buildTopicBreadcrumb(topics: Topic[], topicId: string): string[] {
   return chain;
 }
 
-type SelectedNode = { kind: "topic"; id: string } | { kind: "concept"; id: string } | { kind: "knowledge"; id: string };
+// Map上のnodeはTopic/Conceptのみ（KnowledgeはMap nodeとして存在しない）。
+type SelectedNode = { kind: "topic"; id: string } | { kind: "concept"; id: string };
 
 type SearchResult =
   | { kind: "topic"; id: string; label: string; sublabel: string }
   | { kind: "concept"; id: string; label: string; sublabel: string }
-  | { kind: "knowledge"; id: string; label: string; sublabel: string };
+  // knowledge検索結果はMap上に対応するnodeを持たないため、focus先は常にconceptId
+  // （そのKnowledgeが属するConcept）にする。conceptIdが無い（Concept未紐付けの
+  // 古いデータ）場合は検索結果自体に出さない。
+  | { kind: "knowledge"; id: string; conceptId: string; label: string; sublabel: string };
 
 // Topic / Subtopic / Concept / Knowledgeを横断した単純な部分一致検索。結果は種別ラベル付きで
-// 表示し、選択するとその種別に応じたNodeへフォーカスする。
+// 表示し、選択するとその種別に応じたNodeへフォーカスする（knowledgeは所属Conceptへ）。
 function searchMap(
   query: string,
   topics: Topic[],
@@ -273,8 +271,16 @@ function searchMap(
 
   for (const k of knowledge) {
     if (effectiveStatus(k) === "outdated") continue;
+    const conceptId = k.conceptIds?.[0];
+    if (!conceptId) continue;
     if (!k.concept.toLowerCase().includes(q) && !k.statement.toLowerCase().includes(q)) continue;
-    results.push({ kind: "knowledge", id: k._id, label: k.concept, sublabel: truncateLabel(k.statement, 28) });
+    results.push({
+      kind: "knowledge",
+      id: k._id,
+      conceptId,
+      label: k.concept,
+      sublabel: truncateLabel(k.statement, 28),
+    });
   }
 
   return results.slice(0, limit);
@@ -362,7 +368,6 @@ function ConceptDetailPanel({
   knowledgeItems,
   onClose,
   onSelectConcept,
-  onSelectKnowledge,
   onDigConcept,
 }: {
   concept: UnderstandingConcept;
@@ -372,7 +377,6 @@ function ConceptDetailPanel({
   knowledgeItems: SavedKnowledge[];
   onClose: () => void;
   onSelectConcept: (conceptId: string) => void;
-  onSelectKnowledge: (knowledgeId: string) => void;
   onDigConcept: (conceptId: string) => void;
 }) {
   const conceptById = useMemo(() => new Map(concepts.map((c) => [c._id, c])), [concepts]);
@@ -398,6 +402,8 @@ function ConceptDetailPanel({
       </div>
       {breadcrumb.length > 0 && <p className="concept-detail-breadcrumb">{breadcrumb.join(" > ")}</p>}
 
+      {/* KnowledgeはMap上のnodeではなく、ここ（選択したConceptの詳細）で全文を読む。
+          Map上へは戻れる先が無いため、statementはクリック不可の地の文として表示する。 */}
       <h4 className="concept-detail-section-title">自分が理解していること</h4>
       {knowledgeItems.length === 0 ? (
         <p className="concept-detail-empty">まだこのConceptに紐づく理解はありません。</p>
@@ -407,13 +413,7 @@ function ConceptDetailPanel({
             const status = effectiveStatus(item);
             return (
               <li key={item._id} className={statusClassName(item)}>
-                <button
-                  type="button"
-                  className="concept-detail-knowledge-link"
-                  onClick={() => onSelectKnowledge(item._id)}
-                >
-                  <p className="concept-detail-knowledge-statement">{item.statement}</p>
-                </button>
+                <p className="concept-detail-knowledge-statement">{item.statement}</p>
                 <p className="concept-detail-knowledge-meta">
                   {status !== "active" && <span className="understanding-item-status">{STATUS_LABELS[status]}</span>}
                   {item.source.type === "web_article" ? (
@@ -456,66 +456,6 @@ function ConceptDetailPanel({
   );
 }
 
-function KnowledgeDetailPanel({
-  item,
-  concepts,
-  topics,
-  onClose,
-  onSelectConcept,
-}: {
-  item: SavedKnowledge;
-  concepts: UnderstandingConcept[];
-  topics: Topic[];
-  onClose: () => void;
-  onSelectConcept: (id: string) => void;
-}) {
-  const conceptId = item.conceptIds?.[0];
-  const concept = conceptId ? concepts.find((c) => c._id === conceptId) : undefined;
-  const breadcrumb = concept?.topicIds[0] ? buildTopicBreadcrumb(topics, concept.topicIds[0]) : [];
-  const status = effectiveStatus(item);
-
-  return (
-    <div className="concept-detail-panel">
-      <div className="concept-detail-header">
-        <h3>{item.concept}</h3>
-        <button type="button" className="modal-close" onClick={onClose} aria-label="閉じる">
-          ×
-        </button>
-      </div>
-      {breadcrumb.length > 0 && (
-        <p className="concept-detail-breadcrumb">
-          {[...breadcrumb, concept?.name].filter(Boolean).join(" > ")}
-        </p>
-      )}
-
-      <h4 className="concept-detail-section-title">自分が理解していること</h4>
-      <p className={`concept-detail-knowledge-statement ${statusClassName(item)}`}>{item.statement}</p>
-      <p className="concept-detail-knowledge-meta">
-        {status !== "active" && <span className="understanding-item-status">{STATUS_LABELS[status]}</span>}
-        {item.source.type === "web_article" ? (
-          <a href={item.source.url} target="_blank" rel="noreferrer">
-            {item.source.title}
-          </a>
-        ) : (
-          <span>{sourceDisplayTitle(item.source)}</span>
-        )}
-      </p>
-
-      {concept && (
-        <>
-          <h4 className="concept-detail-section-title">所属する概念</h4>
-          <ul className="concept-detail-related-list">
-            <li>
-              <button type="button" className="topic-item-button" onClick={() => onSelectConcept(concept._id)}>
-                {concept.name}
-              </button>
-            </li>
-          </ul>
-        </>
-      )}
-    </div>
-  );
-}
 
 export default function UnderstandingMapView({
   knowledge,
@@ -548,7 +488,7 @@ export default function UnderstandingMapView({
   // 場合に、フィルタ解除後の再描画を待ってからカメラを寄せるための一時的な保留id。
   const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | TopicNodeData | KnowledgeNodeData>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<ConceptNodeData | TopicNodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
   const nodesRef = useRef<Node[]>([]);
   useEffect(() => {
@@ -678,8 +618,11 @@ export default function UnderstandingMapView({
     [searchQuery, topics, activeConcepts, knowledge, topicById],
   );
 
-  // Root Topic → Subtopic → Concept → Knowledgeという階層をそのままMapの骨格として
-  // dagreでレイアウトする（force layoutはやめた）。ConceptRelation（横断的なつながり）は
+  // Root Topic → Subtopic → Conceptという階層をMapの骨格としてdagreでレイアウトする。
+  // Knowledgeはnodeを持たない（Concept詳細＝右Panelの中身として読む）。Conceptが複数の
+  // Topicに属する場合は、その全topicIdからそれぞれ1本ずつhierarchy edgeを引く
+  // （Conceptを複製せず、同じConcept nodeへ複数の親からedgeを集める。1つのConceptが
+  // 複数箇所に重複表示される問題はこれで解消する）。ConceptRelation（横断的なつながり）は
   // レイアウトには使わず、位置が決まった後に見た目だけの補助edgeとして重ねる。
   // relationが0件でもTopic hierarchyだけでMapとして成立する。
   function recomputeLayout() {
@@ -690,9 +633,15 @@ export default function UnderstandingMapView({
         topicChildCount.set(t.parentId, (topicChildCount.get(t.parentId) ?? 0) + 1);
       }
     }
+    // 1つのConceptが複数Topicに属す場合、それぞれの親Topicの「配下の子」としてカウントする
+    // （Topicの大きさは「どれだけの理解を束ねているか」を表すため、Conceptがどのtopicにも
+    // 実際にedgeを引く分だけ加算してよい）。
     for (const c of relevantConcepts) {
-      const parentTopicId = c.topicIds[0];
-      if (parentTopicId) topicChildCount.set(parentTopicId, (topicChildCount.get(parentTopicId) ?? 0) + 1);
+      for (const topicId of c.topicIds) {
+        if (relevantTopicIds.has(topicId)) {
+          topicChildCount.set(topicId, (topicChildCount.get(topicId) ?? 0) + 1);
+        }
+      }
     }
 
     const hasUnclassified = selectedTopicId === null && relevantConcepts.some((c) => c.topicIds.length === 0);
@@ -730,19 +679,15 @@ export default function UnderstandingMapView({
       const knowledgeItems = knowledgeByConceptFiltered.get(c._id) ?? [];
       const size = computeConceptSize(knowledgeItems.length);
       hierarchyNodes.push({ id: c._id, kind: "concept", width: size, height: size });
-      const parentTopicId = c.topicIds[0];
-      if (parentTopicId && relevantTopicIds.has(parentTopicId)) {
-        hierarchyEdges.push({ id: `topic-concept-${parentTopicId}-${c._id}`, source: parentTopicId, target: c._id });
-      } else if (!parentTopicId && hasUnclassified) {
-        hierarchyEdges.push({ id: `topic-concept-${UNCLASSIFIED_CLUSTER}-${c._id}`, source: UNCLASSIFIED_CLUSTER, target: c._id });
-      }
 
-      // Knowledgeは同じConceptに複数紐づくことがあるため、木として1本の親だけを持たせる
-      // （そのKnowledge自身のconceptIds[0]がこのConceptと一致するときだけleafにする）。
-      for (const item of knowledgeItems) {
-        if ((item.conceptIds ?? [])[0] !== c._id) continue;
-        hierarchyNodes.push({ id: item._id, kind: "knowledge", width: KNOWLEDGE_NODE_WIDTH, height: KNOWLEDGE_NODE_HEIGHT });
-        hierarchyEdges.push({ id: `concept-knowledge-${c._id}-${item._id}`, source: c._id, target: item._id });
+      // 複数Topicに属するConceptは、そのすべての親からedgeを引く（1つだけに絞らない）。
+      const parentTopicIds = c.topicIds.filter((id) => relevantTopicIds.has(id));
+      if (parentTopicIds.length > 0) {
+        for (const parentTopicId of parentTopicIds) {
+          hierarchyEdges.push({ id: `topic-concept-${parentTopicId}-${c._id}`, source: parentTopicId, target: c._id });
+        }
+      } else if (c.topicIds.length === 0 && hasUnclassified) {
+        hierarchyEdges.push({ id: `topic-concept-${UNCLASSIFIED_CLUSTER}-${c._id}`, source: UNCLASSIFIED_CLUSTER, target: c._id });
       }
     }
 
@@ -806,28 +751,6 @@ export default function UnderstandingMapView({
         size,
       };
       newNodes.push({ id: c._id, type: "concept", position: pos, data, style: { width: size, height: size }, zIndex: 2 });
-
-      for (const item of knowledgeItems) {
-        if ((item.conceptIds ?? [])[0] !== c._id) continue;
-        const kPos = positions.get(item._id) ?? { x: 0, y: 0 };
-        const kData: KnowledgeNodeData = {
-          label: truncateLabel(item.statement, KNOWLEDGE_LABEL_MAX_CHARS),
-          fullText: item.statement,
-          isNew: isRecent(item.createdAt),
-          color: topicColorMap.get(clusterKey) ?? "#2b6cb0",
-          dimmed: false,
-          highlighted: false,
-          selected: false,
-        };
-        newNodes.push({
-          id: item._id,
-          type: "knowledge",
-          position: kPos,
-          data: kData,
-          style: { width: KNOWLEDGE_NODE_WIDTH, height: KNOWLEDGE_NODE_HEIGHT },
-          zIndex: 2,
-        });
-      }
     }
 
     setNodes(newNodes);
@@ -910,10 +833,6 @@ export default function UnderstandingMapView({
     if (selectedNode?.kind !== "concept") return null;
     return activeConcepts.find((c) => c._id === selectedNode.id) ?? null;
   }, [selectedNode, activeConcepts]);
-  const selectedKnowledge = useMemo(() => {
-    if (selectedNode?.kind !== "knowledge") return null;
-    return knowledge.find((k) => k._id === selectedNode.id) ?? null;
-  }, [selectedNode, knowledge]);
   const selectedConceptKnowledge = useMemo(
     () => (selectedConcept ? (knowledgeByConcept.get(selectedConcept._id) ?? []) : []),
     [selectedConcept, knowledgeByConcept],
@@ -1103,7 +1022,9 @@ export default function UnderstandingMapView({
                       type="button"
                       className="map-search-result"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => focusNode({ kind: r.kind, id: r.id } as SelectedNode)}
+                      onClick={() =>
+                        focusNode(r.kind === "knowledge" ? { kind: "concept", id: r.conceptId } : { kind: r.kind, id: r.id })
+                      }
                     >
                       <span className={`map-search-result-kind map-search-result-kind-${r.kind}`}>
                         {r.kind === "topic" ? "トピック" : r.kind === "concept" ? "概念" : "理解"}
@@ -1167,7 +1088,6 @@ export default function UnderstandingMapView({
             onNodeClick={(_, node) => {
               const kind = node.type as MapNodeKind | undefined;
               if (kind === "concept") handleSelectNode({ kind: "concept", id: node.id });
-              else if (kind === "knowledge") handleSelectNode({ kind: "knowledge", id: node.id });
               else if (kind === "rootTopic" || kind === "subtopic" || node.type === "topic") {
                 handleSelectNode({ kind: "topic", id: node.id });
               }
@@ -1208,7 +1128,6 @@ export default function UnderstandingMapView({
               knowledgeItems={selectedConceptKnowledge}
               onClose={handleCloseDetail}
               onSelectConcept={(id) => focusNode({ kind: "concept", id })}
-              onSelectKnowledge={(id) => focusNode({ kind: "knowledge", id })}
               onDigConcept={handleDigConcept}
             />
           ) : selectedTopic ? (
@@ -1221,17 +1140,9 @@ export default function UnderstandingMapView({
               onSelectTopic={(id) => focusNode({ kind: "topic", id })}
               onDigTopic={handleDigTopic}
             />
-          ) : selectedKnowledge ? (
-            <KnowledgeDetailPanel
-              item={selectedKnowledge}
-              concepts={activeConcepts}
-              topics={topics}
-              onClose={handleCloseDetail}
-              onSelectConcept={(id) => focusNode({ kind: "concept", id })}
-            />
           ) : (
             <div className="concept-detail-placeholder">
-              <p>Topic / Concept / Knowledgeを選択すると、ここに詳細が表示されます。</p>
+              <p>Topic / Conceptを選択すると、ここに詳細が表示されます。</p>
             </div>
           )}
         </div>

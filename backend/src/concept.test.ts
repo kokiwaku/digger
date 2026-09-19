@@ -11,6 +11,11 @@ test("normalizeConceptName treats meaningfully different names as different", ()
   assert.notEqual(normalizeConceptName("MI6"), normalizeConceptName("SIS"));
 });
 
+test("normalizeConceptName folds full-width/half-width variants to the same value (NFKC)", () => {
+  assert.equal(normalizeConceptName("ＳＵＶ"), normalizeConceptName("SUV"));
+  assert.equal(normalizeConceptName("ＭＩ６"), normalizeConceptName("MI6"));
+});
+
 test("conceptDocumentSchema defaults topicIds to an empty array and status to active", () => {
   const parsed = conceptDocumentSchema.parse({
     userId: "local-user",
