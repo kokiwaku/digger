@@ -12,10 +12,14 @@ backend/
 │   ├── dig.ts                         # /api/dig のURLバリデーションと解析結果の組み立て
 │   ├── deepDive.ts                     # /api/deep-dive のリクエスト検証と回答の組み立て
 │   ├── deepDive.test.ts                 # deepDive.ts のユニットテスト（mock providerでの/api/deep-dive相当のフルパス確認）
-│   ├── knowledgeApi.ts                   # /api/knowledge/extract・/api/knowledge/save・/api/knowledge・/api/understanding-map のリクエスト検証と組み立て
+│   ├── knowledgeApi.ts                   # /api/knowledge/extract・/api/knowledge/save・/api/knowledge・/api/understanding-map のリクエスト検証と組み立て（後方互換用、frontendは/api/memory/*へ移行済み）
 │   ├── knowledge.ts                       # Knowledge（保存済みの理解）のMongoDB永続化と重複判定
 │   ├── knowledge.test.ts                   # knowledge.ts のユニットテスト（正規化ロジックのみ、Mongo未使用）
 │   ├── knowledgeApi.test.ts                 # knowledgeApi.ts のユニットテスト（リクエスト検証・confidenceフィルタ、Mongo未使用）
+│   ├── memoryItem.ts                         # MemoryItem（knowledge以外のpreference/candidate/decision/open_question）のMongoDB永続化と、既存Knowledgeを統一表現に変換するadapter
+│   ├── memoryItem.test.ts                     # memoryItem.ts のユニットテスト（schema・adapter、Mongo未使用）
+│   ├── memoryApi.ts                            # /api/memory/extract・/api/memory/save・/api/memory のリクエスト検証と組み立て（frontendが実際に使うのはこちら）
+│   ├── memoryApi.test.ts                        # memoryApi.ts のユニットテスト（リクエスト検証・confidenceフィルタ、Mongo未使用）
 │   ├── topic.ts                              # Topic（俯瞰用の粗い分類）のMongoDB永続化と階層ロジック（userIdごとに可変）
 │   ├── topic.test.ts                          # topic.ts のユニットテスト（深さ計算・循環検知等の純粋関数のみ、Mongo未使用）
 │   ├── concept.ts                              # Concept（具体的な理解対象）のMongoDB永続化
@@ -50,6 +54,11 @@ backend/
 │       ├── knowledgeExtraction.vertex.ts                        # 実LLM実装（Gemini呼び出し＋prompt生成＋schema検証＋1回だけ再試行、idはサーバー側で付与）
 │       ├── knowledgeExtraction.vertex.test.ts                    # 上記のユニットテスト（フェイクのLlmProviderを使用、ネットワーク未使用）
 │       ├── knowledgeExtractionFactory.ts                          # LLM_PROVIDER環境変数によるKnowledgeExtractionService切り替え
+│       ├── memoryExtraction.ts                                     # 型・zod schema・MemoryExtractionService interface（knowledgeExtraction.tsを一般化）
+│       ├── memoryExtraction.mock.ts                                 # モック実装（knowledge/preference/candidateを1件ずつ返す）
+│       ├── memoryExtraction.vertex.ts                                # 実LLM実装（5種のtype区別・AIによる推測禁止を明示したprompt）
+│       ├── memoryExtraction.vertex.test.ts                            # 上記のユニットテスト（フェイクのLlmProviderを使用、ネットワーク未使用）
+│       ├── memoryExtractionFactory.ts                                  # LLM_PROVIDER環境変数によるMemoryExtractionService切り替え
 │       ├── deepDive.ts                                           # 型・zod schema・DeepDiveService interface
 │       ├── deepDive.mock.ts                                       # モック実装（記事の解析結果から応答を組み立てる）
 │       ├── deepDive.mock.test.ts                                   # モック実装のユニットテスト
@@ -168,9 +177,10 @@ flowchart TD
   - `GET /api/health/db` — `pingDatabase()` を呼び、成功なら `200 { status: "ok", db: "connected" }`、失敗なら `503 { status: "error", db: "disconnected", message }`
   - `POST /api/dig` — `{ input?: string; url?: string; image?: { data: string; mimeType: string } }`（`url`は旧クライアントとの後方互換用エイリアス）を受け取り、`resolveInputSource()`がURL/テキスト/画像を自動判定する。入力不正（空・URLとして不正・テキストが長すぎる・画像のmime/サイズ不正）は`DigInputError`により`400`（画像サイズ超過のみ`413`）。URL入力でSSRF対象ホストなら`400`、robots.txtにより不許可なら`403`。取得・解析に成功すれば`200`で`DigResult`（`source.type`は`web_article`/`text`/`image`）、それ以外の取得・抽出失敗は`422`（本文抽出失敗・非HTML、URL入力のみ）または`502`（アクセス失敗・非2xx・ホスト名解決失敗）で`{ error: string }`。ボディサイズは`hono/body-limit`ミドルウェアで15MBまでに制限（base64化した画像を想定した上限）。
   - `POST /api/deep-dive` — `{ articleAnalysis, question, conversationHistory, userKnowledge? }` を受け取り、schemaバリデーション失敗は `400`、成功すれば `200` で `DeepDiveResponse`（`answer`/`relatedConcepts: { name, relation }[]`/`suggestedFollowUps`）、LLMプロバイダー側のエラーは原因に応じて `500`/`502`/`504`、それ以外の失敗は `502` で `{ error: string }`。**`userKnowledge`をクライアントが渡さない場合、サーバー側で保存済みKnowledge（`status: active`/`foundational`のみ）から今回の質問・記事に関連しそうなものだけを自動的に選んでLLMへ渡す**（詳細は[Relevant Knowledge Retrieval](#relevant-knowledge-retrievalとknowledgeの再利用)を参照）
-  - `POST /api/knowledge/extract` — `{ source, articleAnalysis, conversationHistory }` を受け取り、schemaバリデーション失敗は `400`。保存済みKnowledge（あれば）を`existingKnowledge`としてLLMへ渡した上でKnowledge Extractionを実行し、`200` で `{ candidates: KnowledgeCandidate[] }`（`confidence: "low"`の候補はUXをシンプルに保つため事前に除外）。LLMプロバイダー側のエラーは原因に応じて`500`/`502`/`504`、それ以外の失敗は`502`で`{ error: string }`
-  - `POST /api/knowledge/save` — `{ source, candidates: KnowledgeCandidate[] }`（ユーザーがチェックボックスで選んだ候補のみ）を受け取り、schemaバリデーション失敗は`400`。既存Knowledgeと（concept完全一致 + statement正規化後一致で）重複するものは保存せずスキップし、`200`で`{ savedCount: number, skippedCount: number }`、それ以外の失敗は`502`で`{ error: string }`
-  - `GET /api/knowledge` — 保存済みKnowledge（固定userId分）を`createdAt`降順で`200`の`{ knowledge: KnowledgeDocument[] }`として返す。取得失敗時は`502`で`{ error: string }`
+  - `POST /api/memory/extract` — `{ source, articleAnalysis, conversationHistory }` を受け取り、schemaバリデーション失敗は`400`。Memory Extractionを実行し`200`で`{ candidates: MemoryCandidate[] }`（`reinforces`判定のknowledgeとtype問わず`confidence: "low"`の候補は事前に除外）。LLMプロバイダー側のエラーは原因に応じて`500`/`502`/`504`、それ以外の失敗は`502`で`{ error: string }`。frontendが実際に呼ぶのはこちら（詳細は[Memory Extraction](#memory-extraction-保存対象をknowledgeから一般化するmemoryitemts--memoryapits--llmmemoryextraction)を参照）
+  - `POST /api/memory/save` — `{ source, items: [{ id, type, title?, content, reason?, metadata?, confidence?, origin, relationToExisting? }] }`を受け取り、schemaバリデーション失敗は`400`。`type: "knowledge"`は既存のKnowledge保存パイプラインへ、他typeは`memory_items`コレクションへ保存し、`200`で`{ savedCount: number, skippedCount: number, byType: Record<string, number> }`、それ以外の失敗は`502`で`{ error: string }`
+  - `GET /api/memory` — 既存Knowledgeと`memory_items`を統一した一覧を`createdAt`降順で`200`の`{ items: MemoryItem[] }`として返す。取得失敗時は`502`で`{ error: string }`
+  - `POST /api/knowledge/extract` / `POST /api/knowledge/save` / `GET /api/knowledge` — 上記の一般化前のAPI。挙動は変更しておらず、後方互換のためそのまま残している（frontendはもう呼ばない）
   - `GET /api/understanding-map` — Topic/Concept/ConceptRelationモデル（[後述](#topic--concept--conceptrelationモデルtopicts--conceptts--conceptrelationts--understandingstructurets)）の**現在DBにある状態をそのまま**`200`で`{ topics: TopicDocument[], concepts: ConceptDocument[], relations: ConceptRelationDocument[] }`として返す、読み取り専用のエンドポイント。lazy migrationやLLM呼び出しなどの副作用は一切行わない。取得失敗時は`502`で`{ error: string }`
   - `POST /api/understanding-map/refresh` — 未移行のKnowledgeをConceptへ変換し、未分類のConceptをLLMでTopicへ分類してから、更新後の`{ topics, concepts, relations }`を`200`で返す。GETとは異なり明示的に重い処理（LLM呼び出しを含む）を実行するエンドポイント。取得失敗時は`502`で`{ error: string }`
   - `POST /api/llm/test` — 開発用のLLM疎通確認API（後述）。`{ message: string }` を受け取り、バリデーション失敗は `400`、成功すれば `200` で `{ response: string }`、LLMプロバイダー側のエラーは原因に応じて `500`/`502`/`504` で `{ error: string }`（安全な汎用メッセージのみ。詳細はサーバーログへ）
@@ -290,6 +300,23 @@ Deep Dive会話から抽出された候補（`KnowledgeCandidate`）のうち、
   - `shouldShowForConfirmation(candidate)`: `reinforces`と判定された候補を確認UIの一覧からそもそも除外する（`filterForConfirmationUi()`内で適用）。「既に理解しているのに、なぜ確認・保存を求められるのか」がユーザーから見て分かりにくいための判断で、除外するだけで`reinforceCount`等のDB更新はまだ行いません。
   - `attachRelatedKnowledge(candidates, existingKnowledge)`: `relationToExisting.knowledgeId`が指す既存Knowledgeの`concept`/`statement`を`relatedKnowledge`として付与する。frontendはこれを使って「以前の『◯◯』から理解が深まりました」（`deepened`）や、「以前の理解 / 今回の理解」の比較（`updated`）を表示できる。
   - この変換は`filterForConfirmationUi(result)`→`attachRelatedKnowledge(...)`という2段階のパイプラインで、`buildKnowledgeExtractionResponse()`から呼ばれます（`ConfirmationResult` / `ConfirmationCandidate`型）。
+
+## Memory Extraction: 保存対象をKnowledgeから一般化する（`memoryItem.ts` / `memoryApi.ts` / `llm/memoryExtraction.*`）
+
+Diggerは「AIがKnowledgeを記録するサービス」ではなく「ユーザーが理解・判断・検討を育てていくサービス」という方針のもと、上記のKnowledge Extraction/保存パイプラインを壊さずに、保存対象をより一般的な`MemoryItem`（`knowledge`/`preference`/`candidate`/`decision`/`open_question`）へ広げました。frontendは`/api/knowledge/*`から`/api/memory/*`へ移行済みで、`/api/knowledge/*`はAPIとして後方互換のためだけに残っています。
+
+- **`memoryItem.ts`のtype**: `knowledge`（理解した事実・概念）/ `preference`（ユーザー自身の条件・好み）/ `candidate`（検討対象。`metadata: { reasons?, concerns?, status? }`を持てる）/ `decision`（決めたこと）/ `open_question`（未解決の疑問）の5種類（`memoryItemTypeSchema`）。
+- **保存先はtypeで分岐します**: `knowledge`型は既存の`user_knowledge`コレクション・`saveMultipleKnowledge()`・`linkConceptsForSavedKnowledge()`（Concept/Topicモデルへの反映を含む）へそのまま委ね、他の4 typeは新しい`memory_items`コレクション（`saveMultipleMemoryItems()`）へ保存します。「Knowledgeだけが特別扱いされた構造を無理に引き伸ばさない」という要件を、Knowledge固有のフィールド（`evidence`/`relationsOut`/`conceptIds`等）を持たない別コレクションに分けることで満たしつつ、Map/Concept連携という既存の複雑なロジックは一切複製していません。
+- **既存Knowledgeのadapter（`knowledgeDocumentToMemoryItem()`）**: 既存Knowledgeドキュメントを、migrationせずその場で`type: "knowledge"`の`MemoryItem`（`title`=`concept`、`content`=`statement`、`origin`は常に`"ai_extracted"`）に変換します。`GET /api/memory`は、この変換結果と`memory_items`コレクションを合わせて1つの一覧として返します（`fetchMemoryItems()`）。
+- **origin（AIが一方的に保存内容を決めないことをデータで表現する）**: `ai_extracted`（AI候補を編集せずそのまま保存）/ `user_edited`（AI候補を編集してから保存）/ `user_created`（「自分で追加」から作成）の3種類。判定はfrontend側の責務で、保存リクエストにoriginをそのまま含めてもらう形にしています（backend側で編集有無を再判定する仕組みは持たない）。
+- **`llm/memoryExtraction.ts` / `.mock.ts` / `.vertex.ts` / `Factory.ts`**: `knowledgeExtraction.*`と全く同じ構造（prompt生成→structured output→schema検証→1回だけ再試行→idをサーバー側で付与）を踏襲した並行実装です。`memoryCandidateDraftSchema`は`type`/`title?`/`content`/`reason?`/`metadata?`/`confidence`/`relationToExisting?`を持ち、`relationToExisting`は`knowledge`型でのみ意味を持ちます（他typeでは省略される想定で、backend側もその前提でtoDisplayCategory等を実装）。system promptでは以下を明示しています。
+  - knowledge/preference/candidate/decision/open_questionの5種類の区別基準と具体例。
+  - **preference/candidate/decisionはAIが勝手に推測しない**: 「AIがRAV4がおすすめと回答しただけ」ではcandidateとして抽出せず、ユーザー自身が「RAV4良さそう」「候補に入れたい」のように実際に発言した場合にのみ抽出する（`memoryExtraction.vertex.test.ts`の「passes the conversation and instructs the LLM not to fabricate preference/candidate/decision」でsystem promptにこの文言が含まれることを確認）。
+  - **candidateのreasons/concernsを捏造しない**: 会話中で実際に挙がった理由・懸念のみを使う。
+  - knowledgeとpreferenceの混同を避ける（例:「国産SUVはアフターサービス面で安心感がある」はknowledge、「自分は国産SUVを優先したい」はpreference）。
+- **`memoryApi.ts`**: `POST /api/memory/extract`/`POST /api/memory/save`/`GET /api/memory`のリクエスト検証・組み立て。`shouldShowForConfirmation()`は`reinforces`判定（knowledge限定）に加えて、**type問わず`confidence: "low"`の候補を確認UIから除外**します（candidateに限定せず一律にしているのは、UXを単純に保つという既存Knowledge Extractionの方針をそのまま踏襲したもの）。`toDisplayCategory()`は`knowledge`型のみカテゴリ（`new`/`deepened`/`updated`）を返し、他typeは`undefined`（UI側はtypeそのものでグルーピングするため）。`saveMemoryItems()`は`knowledge`型を`SaveKnowledgeInput`（`evidence`は候補の`reason`をそのまま使う）に変換して既存パイプラインへ渡し、他typeを`SaveMemoryItemInput`に変換して`memory_items`へ保存した後、`{ savedCount, skippedCount, byType }`を返します（`byType`はtype別の保存件数内訳で、frontendの保存後フィードバックに使われます）。
+- **重複判定**: `memory_items`側も既存Knowledgeと同じ「同一userId・同一type・content正規化後一致」という単純な判定（`isDuplicateMemoryItem()`）で、Embedding等はスコープ外のまま踏襲しています。
+- **今回やっていないこと**: preference/candidate/decision/open_questionをDeep DiveのContextとして自動的に取得・活用する仕組み（Knowledgeの[Relevant Knowledge Retrieval](#relevant-knowledge-retrievalとknowledgeの再利用)に相当するもの）は今回未実装です。`candidate.metadata.status`（`candidate`/`shortlisted`/`selected`/`rejected`）も型のみで、比較・ステータス管理UIは作っていません。
 
 ## Relevant Knowledge Retrievalと、Deep DiveでのKnowledgeの再利用（`llm/knowledgeRetrieval.ts`）
 
@@ -528,6 +555,10 @@ curl -X POST http://localhost:8787/api/llm/test \
 - 記事本文の切り詰め（`MAX_CONTENT_LENGTH`、現状12,000文字の単純な文字数カット）を、文の区切りを考慮した切り詰めや要約前処理に改善する
 - Personalized Analysisを呼び出す導線（ユーザーの理解履歴のデータモデルが前提。`llm/personalizedAnalysis.ts`の型自体は`user_knowledge`コレクションと親和性があるので、実装自体は大きくないはず）
 - JavaScriptレンダリングが必要なサイトへの対応（ヘッドレスブラウザの導入）
+- preference/candidate/decision/open_questionを、Deep Diveの関連Contextとして自動的に取得・活用する仕組み（Knowledgeの[Relevant Knowledge Retrieval](#relevant-knowledge-retrievalとknowledgeの再利用)相当のものは`memory_items`にはまだ無い）
+- `memory_items`の重複判定をEmbedding/Vector Searchベースの意味的な類似度判定に強化する（現状は`knowledge`と同じ文字列正規化一致のみ）
+- `candidate.metadata.status`（`candidate`/`shortlisted`/`selected`/`rejected`）を使った比較・ステータス管理UI・専用のCandidate比較画面
+- Knowledge Detailからの「この理解をさらに掘る」（`digOrigin.ts`のConcept/Topic Dig起点と同じパターンをKnowledgeにも広げる）
 - 保存済みKnowledgeのきちんとした一覧UI（現状は動作確認用の暫定的なテスト表示のみ。詳細は[`frontend/README.md`](../frontend/README.md)を参照）
 - Knowledge Extractionの重複判定をEmbedding/Vector Searchベースの意味的な類似度判定に強化する（現状は文字列の正規化一致のみで、言い回しが変わると重複として検出できない）
 - Knowledge ExtractionをArticle Analysisの深掘りだけでなく、記事を読んだだけ（Deep Diveなし）のケースにも広げるかどうかの検討（現状は会話ログが前提）

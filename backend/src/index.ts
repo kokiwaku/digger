@@ -16,6 +16,13 @@ import {
   fetchUnderstandingMap,
   refreshAndFetchUnderstandingMap,
 } from "./knowledgeApi.js";
+import {
+  parseExtractMemoryRequest,
+  buildMemoryExtractionResponse,
+  parseSaveMemoryRequest,
+  saveMemoryItems,
+  fetchMemoryItems,
+} from "./memoryApi.js";
 import { LlmProviderError, toSafeApiResponse } from "./llm/provider/llmProviderError.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -202,6 +209,70 @@ app.get("/api/knowledge", async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "知識の取得に失敗しました";
     console.error("[api/knowledge] error", { message });
+    return c.json({ error: message }, 502);
+  }
+});
+
+// Memory Extraction: Knowledge Extractionを、保存対象がKnowledgeに限定されない
+// より一般的な形（knowledge/preference/candidate/decision/open_question）へ広げたもの。
+// 既存の/api/knowledge/*は後方互換のためそのまま残し、frontendはこちらへ移行する。
+app.post("/api/memory/extract", async (c) => {
+  const body = await c.req.json().catch(() => null);
+
+  let request;
+  try {
+    request = parseExtractMemoryRequest(body);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid request";
+    return c.json({ error: message }, 400);
+  }
+
+  try {
+    const result = await buildMemoryExtractionResponse(request);
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof LlmProviderError) {
+      console.error("[api/memory/extract] Memory Extraction provider error", {
+        code: err.code,
+        message: err.message,
+        cause: err.cause,
+      });
+      const { status, message: safeMessage } = toSafeApiResponse(err);
+      return c.json({ error: safeMessage }, status);
+    }
+    const message = err instanceof Error ? err.message : "保存候補の抽出に失敗しました";
+    return c.json({ error: message }, 502);
+  }
+});
+
+app.post("/api/memory/save", async (c) => {
+  const body = await c.req.json().catch(() => null);
+
+  let request;
+  try {
+    request = parseSaveMemoryRequest(body);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "invalid request";
+    return c.json({ error: message }, 400);
+  }
+
+  try {
+    const result = await saveMemoryItems(request);
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "保存に失敗しました";
+    console.error("[api/memory/save] error", { message });
+    return c.json({ error: message }, 502);
+  }
+});
+
+app.get("/api/memory", async (c) => {
+  try {
+    const items = await fetchMemoryItems();
+    return c.json({ items });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "取得に失敗しました";
+    console.error("[api/memory] error", { message });
     return c.json({ error: message }, 502);
   }
 });
