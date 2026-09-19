@@ -149,6 +149,16 @@ Content-Type: application/json
 - **状態による見え方**: `status: outdated`のKnowledgeはマップに表示せず、`merged`/`outdated`は一覧上で少し薄く表示します（詳細はモーダルから確認可能）。
 - Knowledgeが0件のときは、通常のからっぽな管理画面のようにならないよう、モールのキャラクターと「まだ理解マップは小さいです。気になる記事を掘ると、ここにあなたの理解が少しずつ育っていきます。」という案内文、「記事を掘る」ボタンを表示します。
 
+## 自分の理解から、さらに掘る（循環）
+
+「掘る → 分かる → 理解が蓄積される」で終わらず、蓄積した理解の中から気になる箇所を見つけて再び掘れることが、Diggerのもう一つの核です。マップタブのConcept Detail Panel／Topic Detail Panelには「このConceptを掘る」「このTopicを掘る」というボタンがあり、押すと`/dig/concept/:conceptId`・`/dig/topic/:topicId`へ遷移し、そのConcept/Topicを起点にしたDeep Diveセッションが始まります。左サイドバー（モバイルはBottom Navigation）は他の画面と同様そのまま残ります。
+
+- **新しいバックエンドAPIは追加していません**。選択したConcept/Topicと、それに紐づく既存Knowledge・関連Concept・親子Topicから、既存の`ArticleAnalysis`と同じ形（`summary`/`concepts`/`connections`等）のオブジェクトをフロントエンド側で組み立て（`frontend/src/digOrigin.ts`）、通常のURL/テキスト/画像入力と全く同じ`/api/deep-dive`・`/api/knowledge/extract`・`/api/knowledge/save`にそのまま渡しています。既存Knowledgeは無制限に埋め込むのではなく件数の上限（Concept起点で最大8件、関連Concept最大6件、Topic起点で子Concept最大10件）を設けています。
+- **画面はComposerなしのシンプルな形**です。見出し（例:「田沢梨乃容疑者について掘る」）と、Diggerからの短い一言（例:「これまでの理解を踏まえてさらに掘り下げましょう。気になることをそのまま聞いてください。」）、自由入力欄だけを表示し、AIが質問候補を大量に提示することはありません（通常のDeep Dive画面と同じ「自由入力が主役」という方針）。会話・Knowledge Extraction・保存確認パネルのUIは`frontend/src/DeepDiveSession.tsx`として通常のComposer画面（`DigPage.tsx`）と共通化しています。
+- **保存されるKnowledgeの`source`は`web_article`/`text`/`image`のいずれでもなく**、新たに追加した`{ "type": "concept_dig", "conceptId": "...", "title": "..." }` / `{ "type": "topic_dig", "topicId": "...", "title": "..." }`という形になります（`backend/src/knowledgeSource.ts`）。これにより、保存されたKnowledgeが「外部からの入力」ではなく「自分の理解からさらに掘ったセッション」由来であることが判別できます。
+- 保存すると、通常のKnowledge Extractionと同様にMongoDBへ保存されるだけなので、**マップは特別扱いなしで自動的に新しい理解を反映します**。さらに、Concept/Topicを起点に掘って新しく生まれたConceptについては、どのTopicに属すかが起点から自明なため、LLMによるTopic分類（`理解マップを更新`ボタンで走る重い処理）を待たずに、その場で正しいTopicへ直接反映されます（詳細は[`backend/README.md`](backend/README.md#topic--concept--conceptrelationモデルtopicts--conceptts--conceptrelationts--understandingstructurets)を参照）。
+- 「← 理解マップへ戻る」ボタンで`/understanding/map`に戻ると、掘り始めた時点のTopicフィルタと選択していたConceptを復元します（`react-router-dom`の`navigate`にstateとして渡しているため、直接URLアクセスやリロードをまたいだ復元はできません）。
+
 ### 記事取得ポリシー
 
 Diggerが外部Webサイトへアクセスする際は、以下の方針を守ります。
@@ -177,7 +187,7 @@ docker compose up --build
   - `GET /api/health/db` — Hono → MongoDB の接続確認
   - `POST /api/dig` — URL・貼り付けテキスト・画像のいずれかを受け取り、解析結果を返す（[「掘る」機能](#掘る機能mvp)を参照）
   - `POST /api/deep-dive` — 解析結果と質問を受け取り、深掘りの回答を返す（[深掘り対話機能](#深掘り対話機能)を参照）
-  - `POST /api/knowledge/extract` / `POST /api/knowledge/save` / `GET /api/knowledge` — 深掘り会話から理解の候補を抽出し、ユーザーが選んだものだけをMongoDBへ保存する（[理解の蓄積（Knowledge Extraction）](#理解の蓄積knowledge-extraction)を参照）。`GET /api/knowledge`は[自分の理解ページ](#自分の理解ページ)からも利用され、未分類のKnowledgeへのトピック付与もこの呼び出しの中で行われます
+  - `POST /api/knowledge/extract` / `POST /api/knowledge/save` / `GET /api/knowledge` — 深掘り会話から理解の候補を抽出し、ユーザーが選んだものだけをMongoDBへ保存する（[理解の蓄積（Knowledge Extraction）](#理解の蓄積knowledge-extraction)を参照）。`GET /api/knowledge`は[自分の理解ページ](#自分の理解ページ)からも利用され、未分類のKnowledgeへのトピック付与もこの呼び出しの中で行われます。マップから「このConceptを掘る」「このTopicを掘る」で始めたセッションも同じ3本のAPIをそのまま使います（[自分の理解から、さらに掘る（循環）](#自分の理解からさらに掘る循環)を参照）
   - `POST /api/llm/test` — 開発用のLLM疎通確認API。詳細は [`backend/README.md`](backend/README.md#vertex-ai-gemini-のセットアップ) を参照
 - MongoDB: `mongodb://localhost:27017`（ホストからも接続可能）
 
@@ -250,7 +260,7 @@ npm run dev
 
 ## 今後について
 
-記事の取得・本文抽出、Article Analysis・Deep Dive・Knowledge ExtractionのVertex AI（Gemini）実LLM化、「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化、保存済みKnowledgeのDeep Diveでの再利用、Knowledgeの理解状態（`status`）・既存Knowledgeとの関係（`relationToExisting`）の判定、[自分の理解ページ](#自分の理解ページ)（最近／トピック／マップの3ビュー）は実装済みですが、以下は未実装・未設計です。
+記事の取得・本文抽出、Article Analysis・Deep Dive・Knowledge ExtractionのVertex AI（Gemini）実LLM化、「掘る → 分かる → 理解したことが蓄積される」というコアループのMongoDBへの永続化、保存済みKnowledgeのDeep Diveでの再利用、Knowledgeの理解状態（`status`）・既存Knowledgeとの関係（`relationToExisting`）の判定、[自分の理解ページ](#自分の理解ページ)（最近／トピック／マップの3ビュー）、[自分の理解からさらに掘る循環](#自分の理解からさらに掘る循環)（Concept/Topicを起点にしたDeep Dive）は実装済みですが、以下は未実装・未設計です。
 
 - Personalized Analysis（ユーザーの過去の理解と照合するLLM処理）を呼び出す導線（型・モックは実装済み）
 - Deep Diveの会話履歴の要約（現状は直近20件を単純に切り詰めるだけ）

@@ -73,6 +73,10 @@ function formatSourceInfo(source: KnowledgeExtractionInput["source"]): string {
   if (source.type === "web_article") {
     return `タイトル: ${source.title}\nURL: ${source.url}`;
   }
+  if (source.type === "concept_dig" || source.type === "topic_dig") {
+    const kind = source.type === "concept_dig" ? "Concept" : "Topic";
+    return `入力元: 「${source.title ?? "(不明)"}」という${kind}を起点に、自分の理解からさらに掘ったセッション`;
+  }
   const label = source.type === "text" ? "テキスト入力" : "画像入力";
   return `入力元: ${source.title ?? label}`;
 }

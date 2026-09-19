@@ -105,6 +105,26 @@ test("knowledgeDocumentSchema accepts documents with a text or image source (non
   assert.equal(knowledgeDocumentSchema.safeParse(imageDoc).success, true);
 });
 
+test("knowledgeDocumentSchema accepts documents saved from a Concept/Topic dig session", () => {
+  const conceptDigDoc = {
+    userId: "local-user",
+    concept: "MI6の最新の活動事例",
+    statement: "MI6は近年ロシアの影響工作への対抗を重点分野としている",
+    evidence: "根拠",
+    confidence: "high" as const,
+    source: { type: "concept_dig" as const, conceptId: "concept-1", title: "MI6" },
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const topicDigDoc = {
+    ...conceptDigDoc,
+    source: { type: "topic_dig" as const, topicId: "topic-1", title: "情報・インテリジェンス" },
+  };
+
+  assert.equal(knowledgeDocumentSchema.safeParse(conceptDigDoc).success, true);
+  assert.equal(knowledgeDocumentSchema.safeParse(topicDigDoc).success, true);
+});
+
 test("knowledgeDocumentSchema accepts a document with status and relatedKnowledgeIds", () => {
   const doc = {
     userId: "local-user",

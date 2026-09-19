@@ -7,7 +7,13 @@
 //   - ConceptのTopicへの分類（既存のKnowledge.topicPath分類とは別に、Concept単位で行う）
 //   - 上記3つを束ねた「現在の理解構造」の取得（GET /api/understanding-mapの実体）
 import { FIXED_USER_ID, getKnowledgeById, getUserKnowledge, setKnowledgeConceptIds, type KnowledgeDocument } from "./knowledge.js";
-import { findOrCreateConcept, getUserConcepts, addTopicToConcept, type ConceptDocument } from "./concept.js";
+import {
+  findOrCreateConcept,
+  getConceptById,
+  getUserConcepts,
+  addTopicToConcept,
+  type ConceptDocument,
+} from "./concept.js";
 import {
   createConceptRelation,
   getUserConceptRelations,
@@ -80,17 +86,49 @@ export async function syncConceptRelationsFromKnowledge(userId: string, savedDoc
   }
 }
 
+// Concept/Topic Digから保存されたKnowledgeについて、起点のConcept/Topicを伝える。
+// 「田沢梨乃容疑者について掘る」で新しいConcept（例:「コカイン所持」）が生まれた場合、
+// それがどのTopicに属するかはLLMに聞かなくても自明（起点と同じTopic）なので、
+// この情報をlinkConceptsForSavedKnowledge()に渡し、重いLLM分類（
+// assignTopicsToUnclassifiedConcepts()）を待たずに即座にTopic階層へ反映させる。
+export type SavedKnowledgeOriginHint =
+  | { type: "concept"; conceptId: string }
+  | { type: "topic"; topicId: string };
+
+// originHintから「新しく作られたConceptに直接付けるべきtopicId一覧」を解決する。
+// concept起点の場合、起点Concept自身がまだ未分類（topicIds空）なら継承先が無いため
+// 空配列を返す（無理にLLM相当の推測をしない。その場合は従来通りlazy classification任せ）。
+async function resolveOriginTopicIds(userId: string, originHint: SavedKnowledgeOriginHint): Promise<string[]> {
+  if (originHint.type === "topic") return [originHint.topicId];
+  const originConcept = await getConceptById(userId, originHint.conceptId);
+  return originConcept?.topicIds ?? [];
+}
+
 // Knowledge保存直後の「軽量更新」: 新しく保存されたKnowledgeそれぞれについて、
 // Conceptへの紐付けとConceptRelationの生成を行う。LLMを使うTopic分類（重い処理）は
-// ここでは行わず、assignTopicsToUnclassifiedConcepts()（GET /api/understanding-map経由の
-// 「深い再構成」）に委ねる。
-export async function linkConceptsForSavedKnowledge(userId: string, savedDocs: KnowledgeDocument[]): Promise<void> {
+// 通常ここでは行わず、assignTopicsToUnclassifiedConcepts()（GET /api/understanding-map経由の
+// 「深い再構成」）に委ねる。ただしoriginHint（Concept/Topic Dig起点）があり、かつ
+// 新しく作られた（＝まだtopicIdsが空の）Conceptについては、起点から自明なTopicを
+// その場で直接付与し、LLM分類を待たずにMapへ反映させる。
+export async function linkConceptsForSavedKnowledge(
+  userId: string,
+  savedDocs: KnowledgeDocument[],
+  originHint?: SavedKnowledgeOriginHint,
+): Promise<void> {
+  const originTopicIds = originHint ? await resolveOriginTopicIds(userId, originHint) : [];
+
   for (const doc of savedDocs) {
     if (!doc._id) continue;
     try {
       const concept = await findOrCreateConcept(userId, doc.concept);
       await setKnowledgeConceptIds(doc._id.toHexString(), [concept._id!.toHexString()], userId);
       await syncConceptRelationsFromKnowledge(userId, doc);
+
+      if (originTopicIds.length > 0 && concept.topicIds.length === 0 && concept._id) {
+        for (const topicId of originTopicIds) {
+          await addTopicToConcept(userId, concept._id.toHexString(), topicId);
+        }
+      }
     } catch (err) {
       console.error("[understandingStructure] failed to link concept/relations for saved knowledge, continuing", err);
     }

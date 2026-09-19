@@ -1,10 +1,13 @@
-// URLだけでなく、貼り付けテキスト・画像からも「掘れる」ようにしたための判別可能なユニオン。
-// web_articleは既存の形のまま（urlを持つのはこれだけ）。text/imageにはurlが無く、
-// titleは任意（無ければ「テキスト入力」「画像入力」といったUI側のfallback表示になる）。
+// URLだけでなく、貼り付けテキスト・画像、さらには「自分の理解」画面のConcept/Topicを
+// 起点に再び掘ったセッションからも保存できるようにしたための判別可能なユニオン。
+// web_articleは既存の形のまま（urlを持つのはこれだけ）。それ以外にはurlが無く、
+// titleは任意（無ければUI側がfallback表示をする）。
 export type DigSource =
   | { type: "web_article"; url: string; title: string }
   | { type: "text"; title?: string }
-  | { type: "image"; title?: string };
+  | { type: "image"; title?: string }
+  | { type: "concept_dig"; conceptId: string; title?: string }
+  | { type: "topic_dig"; topicId: string; title?: string };
 
 export type Concept = {
   id: string;

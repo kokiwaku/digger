@@ -21,6 +21,7 @@ import {
   getUnderstandingMap,
   linkConceptsForSavedKnowledge,
   refreshUnderstandingMap,
+  type SavedKnowledgeOriginHint,
 } from "./understandingStructure.js";
 import type { UserKnowledge } from "./llm/personalizedAnalysis.js";
 
@@ -155,12 +156,23 @@ export async function saveCandidatesAsKnowledge(request: SaveKnowledgeRequest) {
 
   const { saved, skipped } = await saveMultipleKnowledge(saveInputs);
 
+  // Concept/Topic Dig（自分の理解画面から起点Concept/Topicを指定して掘ったセッション）
+  // からの保存なら、新しく生まれたConceptがどのTopicに属すかは起点から自明なので、
+  // LLMによる分類を待たずに直接反映できるようヒントとして渡す（詳細はunderstandingStructure.ts参照）。
+  const originHint: SavedKnowledgeOriginHint | undefined =
+    request.source.type === "concept_dig"
+      ? { type: "concept", conceptId: request.source.conceptId }
+      : request.source.type === "topic_dig"
+        ? { type: "topic", topicId: request.source.topicId }
+        : undefined;
+
   // Topic/Concept/Knowledgeモデル（understandingStructure.ts）への「軽量更新」。
   // Concept作成・紐付け・ConceptRelation生成はDB書き込みのみで完結する軽い処理のため、
-  // ここで同期的に行う（LLMによるTopic分類は行わない。それはGET /api/understanding-map
-  // 側の「深い再構成」に委ねる）。失敗してもKnowledge本体の保存結果には影響させない。
+  // ここで同期的に行う（LLMによるTopic分類は通常行わない。それはGET /api/understanding-map
+  // 側の「深い再構成」に委ねる。ただしoriginHintがある場合はその場で直接分類する）。
+  // 失敗してもKnowledge本体の保存結果には影響させない。
   try {
-    await linkConceptsForSavedKnowledge(FIXED_USER_ID, saved);
+    await linkConceptsForSavedKnowledge(FIXED_USER_ID, saved, originHint);
   } catch (err) {
     console.error("[knowledge/save] failed to link concepts/relations, continuing", err);
   }

@@ -62,6 +62,10 @@ export async function findOrCreateConcept(userId: string, name: string): Promise
   return { ...doc, _id: result.insertedId };
 }
 
+export async function getConceptById(userId: string, conceptId: string): Promise<ConceptDocument | null> {
+  return getCollection().findOne({ _id: new ObjectId(conceptId), userId });
+}
+
 export async function addTopicToConcept(userId: string, conceptId: string, topicId: string): Promise<void> {
   await getCollection().updateOne(
     { _id: new ObjectId(conceptId), userId },
