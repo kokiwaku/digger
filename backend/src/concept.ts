@@ -75,6 +75,22 @@ export async function addTopicToConcept(userId: string, conceptId: string, topic
   );
 }
 
+// Topicの重複統合（understandingStructure.tsのmergeDuplicateTopicsByName()）用。
+// oldTopicIdを参照しているConceptについて、topicIdsをnewTopicIdへ付け替える
+// （$addToSetしてから$pullする2段階。同じ更新の中で行うより単純で確実）。
+// newTopicIdが既にtopicIdsに含まれていた場合は自然に重複排除される（$addToSetのため）。
+export async function replaceTopicIdOnConcepts(userId: string, oldTopicId: string, newTopicId: string): Promise<void> {
+  const collection = getCollection();
+  await collection.updateMany(
+    { userId, topicIds: oldTopicId },
+    { $addToSet: { topicIds: newTopicId }, $set: { updatedAt: new Date() } },
+  );
+  await collection.updateMany(
+    { userId, topicIds: oldTopicId },
+    { $pull: { topicIds: oldTopicId }, $set: { updatedAt: new Date() } },
+  );
+}
+
 // sourceConceptをtargetConceptへ統合する。sourceはstatus: "merged"にする（削除はしない）。
 // Knowledge.conceptIdsの付け替えはunderstandingStructure.ts側の責務とする
 // （Knowledgeコレクションを横断する必要があるため）。

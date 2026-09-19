@@ -7,8 +7,11 @@ import {
   isPathWithinMaxDepth,
   buildTopicPathStrings,
   topicDocumentSchema,
+  normalizeTopicName,
+  groupDuplicateTopicsByName,
   MAX_TOPIC_DEPTH,
   type TopicLike,
+  type DuplicateTopicLike,
 } from "./topic.js";
 
 test("computeTopicDepth returns 1 for a root topic", () => {
@@ -129,4 +132,58 @@ test("topicDocumentSchema accepts merged/archived status and an explicit parentI
     updatedAt: new Date(),
   });
   assert.equal(archived.status, "archived");
+});
+
+test("normalizeTopicName trims whitespace, lowercases, and folds full-width/half-width variants", () => {
+  assert.equal(normalizeTopicName("  SUV  "), "suv");
+  assert.equal(normalizeTopicName("ＳＵＶ"), normalizeTopicName("SUV"));
+});
+
+test("groupDuplicateTopicsByName groups active topics with the same normalized name under different parents", () => {
+  const topics: DuplicateTopicLike[] = [
+    { id: "auto", name: "自動車", parentId: null, createdAt: new Date("2026-01-01") },
+    { id: "carSelection", name: "車種選択", parentId: "auto", createdAt: new Date("2026-01-01") },
+    { id: "suv1", name: "SUV", parentId: "auto", createdAt: new Date("2026-01-01") },
+    { id: "suv2", name: "SUV", parentId: "carSelection", createdAt: new Date("2026-01-02") },
+  ];
+
+  const groups = groupDuplicateTopicsByName(topics);
+
+  assert.equal(groups.length, 1);
+  assert.deepEqual(
+    groups[0].map((t) => t.id).sort(),
+    ["suv1", "suv2"],
+  );
+});
+
+test("groupDuplicateTopicsByName treats full-width/half-width variants as duplicates", () => {
+  const topics: DuplicateTopicLike[] = [
+    { id: "suv1", name: "SUV", parentId: null, createdAt: new Date("2026-01-01") },
+    { id: "suv2", name: "ＳＵＶ", parentId: null, createdAt: new Date("2026-01-02") },
+  ];
+
+  const groups = groupDuplicateTopicsByName(topics);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].length, 2);
+});
+
+test("groupDuplicateTopicsByName excludes merged/archived topics from grouping", () => {
+  const topics: DuplicateTopicLike[] = [
+    { id: "suv1", name: "SUV", parentId: null, status: "active", createdAt: new Date("2026-01-01") },
+    { id: "suv2", name: "SUV", parentId: null, status: "merged", createdAt: new Date("2026-01-02") },
+  ];
+
+  const groups = groupDuplicateTopicsByName(topics);
+
+  assert.deepEqual(groups, []);
+});
+
+test("groupDuplicateTopicsByName returns no groups when there is no duplicate", () => {
+  const topics: DuplicateTopicLike[] = [
+    { id: "auto", name: "自動車", parentId: null, createdAt: new Date() },
+    { id: "finance", name: "経済", parentId: null, createdAt: new Date() },
+  ];
+
+  assert.deepEqual(groupDuplicateTopicsByName(topics), []);
 });

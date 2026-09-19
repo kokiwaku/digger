@@ -86,6 +86,36 @@ export interface NamedTopicLike extends TopicLike {
   status?: TopicStatus;
 }
 
+// Topic名の表記揺れ（前後の空白・大文字小文字・全角/半角）を吸収する正規化。
+// concept.tsのnormalizeConceptName()と同じ思想・同じ実装（Embedding等の意味的な
+// 類似度判定はスコープ外。あくまで見た目上ほぼ同じ表記の統合のみ）。
+export function normalizeTopicName(name: string): string {
+  return name.normalize("NFKC").trim().toLowerCase();
+}
+
+export interface DuplicateTopicLike extends NamedTopicLike {
+  createdAt: Date;
+}
+
+// 正規化後の名前が完全一致するactive Topicをグループ化し、2件以上のグループだけを返す。
+// Topic分類（LLM）はバッチ・会話ごとに実行されるため、同じ名前のTopicが異なる親の下に
+// それぞれ独立して作られてしまうことがある（例:「自動車」の直下と「自動車 > 車種選択」の下、
+// 両方に「SUV」ができる）。Topicは1つの親しか持てない設計（Concept.topicIdsのような
+// 複数所属は認めない）ため、同じ名前のTopicが複数箇所に見えてしまう問題は、Map表示側の
+// 工夫ではなく、重複したTopic entityそのものを統合することで解決する
+// （understandingStructure.tsのmergeDuplicateTopicsByName()が実際の統合を行う）。
+export function groupDuplicateTopicsByName<T extends DuplicateTopicLike>(topics: T[]): T[][] {
+  const groups = new Map<string, T[]>();
+  for (const t of topics) {
+    if ((t.status ?? "active") !== "active") continue;
+    const key = normalizeTopicName(t.name);
+    const list = groups.get(key);
+    if (list) list.push(t);
+    else groups.set(key, [t]);
+  }
+  return Array.from(groups.values()).filter((group) => group.length > 1);
+}
+
 // Topic階層から、root→leafの名前チェーン（例:["経済","金融政策"]）をすべて再構築する。
 // Topic分類prompt（既存Topic構造の参考情報）や、将来のTopic Viewでの表示に使う。
 // merged/archivedのTopicは、新規分類の再利用候補として扱わないため除外する。
