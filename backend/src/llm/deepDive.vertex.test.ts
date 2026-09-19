@@ -6,6 +6,7 @@ import type { LlmProvider, GenerateTextInput } from "./provider/llmProvider.js";
 import type { ArticleAnalysis } from "./articleAnalysis.js";
 import type { ConversationTurn } from "./conversation.js";
 import type { UserKnowledge } from "./personalizedAnalysis.js";
+import type { DeepDiveMemoryItem } from "./deepDive.js";
 
 const ARTICLE_ANALYSIS: ArticleAnalysis = {
   summary: "テスト用の要約です。",
@@ -29,6 +30,7 @@ function baseInput(
     question: string;
     conversationHistory: ConversationTurn[];
     userKnowledge: UserKnowledge[];
+    relevantMemory: DeepDiveMemoryItem[];
   }> = {},
 ) {
   return {
@@ -267,4 +269,122 @@ test("ask() prompt prioritizes a sufficient answer over a detailed one, without 
   assert.ok(capturedInput);
   assert.match(capturedInput.systemPrompt ?? "", /「詳しい回答」より「今の疑問にちょうどよく答える」ことを優先/);
   assert.match(capturedInput.systemPrompt ?? "", /短くするために情報を曖昧にしない/);
+});
+
+test("ask() system prompt explicitly permits recommendations/comparisons/candidates and forbids the old refusal framing", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  await service.ask(baseInput());
+
+  assert.ok(capturedInput);
+  const systemPrompt = capturedInput.systemPrompt ?? "";
+  assert.match(systemPrompt, /候補を探す/);
+  assert.match(systemPrompt, /比較する/);
+  assert.match(systemPrompt, /ユーザーが具体的な候補・比較・おすすめ・ランキングを求めた場合は、それを拒否せず直接答えてください/);
+  assert.match(systemPrompt, /Digger側がどの掘り方だけを許可するかを決めつけないでください/);
+});
+
+test("ask() system prompt distinguishes objective info / general tendency / preference-based recommendation / uncertain speculation", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  await service.ask(baseInput());
+
+  assert.ok(capturedInput);
+  const systemPrompt = capturedInput.systemPrompt ?? "";
+  assert.match(systemPrompt, /客観情報/);
+  assert.match(systemPrompt, /一般的傾向/);
+  assert.match(systemPrompt, /ユーザー条件からの推奨/);
+  assert.match(systemPrompt, /不確実な推測/);
+});
+
+test("ask() system prompt tells the model not to assert time-sensitive info (rankings/prices/latest news) as current without web search", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  await service.ask(baseInput());
+
+  assert.ok(capturedInput);
+  const systemPrompt = capturedInput.systemPrompt ?? "";
+  assert.match(systemPrompt, /Web検索機能を持たない/);
+  assert.match(systemPrompt, /最新の事実であるかのように断定しないでください/);
+});
+
+test("ask() system prompt adds a candidate/comparison/recommendation question-type guidance that answers first without a long preamble", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  await service.ask(baseInput());
+
+  assert.ok(capturedInput);
+  assert.match(capturedInput.systemPrompt ?? "", /候補・比較・推薦の質問/);
+  assert.match(capturedInput.prompt, /候補・比較・推薦を求められた場合はDigger側の役割を理由に断らず/);
+});
+
+test("ask() includes relevantMemory (preference/candidate/decision/open_question) in the prompt when provided", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  const relevantMemory: DeepDiveMemoryItem[] = [
+    { type: "preference", content: "子供2人が酔いづらいことを重視する" },
+    { type: "candidate", title: "トヨタ RAV4", content: "トヨタ RAV4", metadata: { reasons: ["後席が広い", "国産"] } },
+    { type: "decision", content: "RAV4とフォレスターを比較する" },
+  ];
+  await service.ask(baseInput({ question: "SUVを5台候補にして", relevantMemory }));
+
+  assert.ok(capturedInput);
+  assert.match(capturedInput.prompt, /子供2人が酔いづらいことを重視する/);
+  assert.match(capturedInput.prompt, /トヨタ RAV4/);
+  assert.match(capturedInput.prompt, /後席が広い、国産/);
+  assert.match(capturedInput.prompt, /RAV4とフォレスターを比較する/);
+});
+
+test("ask() omits the relevant-memory section entirely when relevantMemory is empty/undefined", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  await service.ask(baseInput({ relevantMemory: [] }));
+
+  assert.ok(capturedInput);
+  assert.doesNotMatch(capturedInput.prompt, /検討候補・決めたこと・未解決の疑問/);
+});
+
+test("ask() prompt does not force mentioning relevant memory in every answer", async () => {
+  let capturedInput: GenerateTextInput | undefined;
+  const provider = fakeProvider(async (input) => {
+    capturedInput = input;
+    return JSON.stringify(VALID_RESPONSE);
+  });
+
+  const service = createVertexDeepDiveService(() => provider);
+  const relevantMemory: DeepDiveMemoryItem[] = [{ type: "preference", content: "国産車を優先したい" }];
+  await service.ask(baseInput({ relevantMemory }));
+
+  assert.ok(capturedInput);
+  assert.match(capturedInput.prompt, /自然に反映するだけで構いません/);
 });
